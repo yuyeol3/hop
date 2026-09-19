@@ -58,7 +58,6 @@ jobs:
             echo "tag=$current_tag" >> "$GITHUB_OUTPUT"
             exit 0
           fi
-
           echo "changed=true" >> "$GITHUB_OUTPUT"
           echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
 
@@ -217,4 +216,3 @@ jobs:
               --title "chore: update rhwp to $RHWP_TAG" \
               --body "$body"
           fi
-

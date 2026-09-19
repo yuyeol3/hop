@@ -56,4 +56,3 @@ candidate로 만드는 절차를 소유하지만, 새 rhwp 릴리스 발견과 c
 workflow와 contract test를 되돌리면 수동 updater 절차로 즉시 복귀할 수 있다. 자동화 브랜치와 PR은
 `main`과 분리되어 있으며, 실패한 candidate는 병합하지 않고 브랜치를 삭제해 복구한다. updater 자체의
 실패 복구 동작은 변경하지 않는다.
-

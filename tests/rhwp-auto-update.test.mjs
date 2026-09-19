@@ -22,4 +22,3 @@ test('isolates upstream candidate generation from pull request write permissions
   assert.match(publishJob, /gh pr create/);
   assert.doesNotMatch(publishJob, /pnpm upstream:update/);
 });
-
