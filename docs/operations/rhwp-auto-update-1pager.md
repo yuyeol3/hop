@@ -34,6 +34,7 @@ candidate로 만드는 절차를 소유하지만, 새 rhwp 릴리스 발견과 c
 - 공개 upstream의 GitHub fork에서 동작하며 원 MIT `LICENSE`와 저작권 고지를 유지한다.
 - 생성 job은 `contents: read`와 `persist-credentials: false`만 사용한다.
 - 쓰기 권한 job은 새 runner에서 허용된 updater 산출물 patch만 적용하고 upstream 코드를 실행하지 않는다.
+- `GITHUB_TOKEN`이 만든 PR은 승인 대기 상태가 되므로 게시 job이 기존 CI를 `workflow_dispatch`로 실행한다.
 
 ## Implementation outline
 
@@ -41,7 +42,8 @@ candidate로 만드는 절차를 소유하지만, 새 rhwp 릴리스 발견과 c
 2. 최신 GitHub release tag를 읽고 기존 `config/rhwp-upstream.json`의 tag와 비교한다.
 3. 읽기 전용 job에서 고정 도구를 설치하고 updater와 upstream 검증을 실행한다.
 4. updater가 소유하는 경로만 binary patch artifact로 전달한다.
-5. 별도 쓰기 job에서 patch를 적용하고 `automation/rhwp-upstream` 브랜치와 PR을 생성 또는 갱신한다.
+5. 별도 쓰기 job에서 patch를 적용하고 `automation/rhwp-upstream` 브랜치와 PR을 생성 또는 갱신한 뒤
+   해당 branch에 기존 CI를 명시적으로 dispatch한다.
 6. workflow의 권한 분리와 핵심 명령을 repository-level contract test로 고정한다.
 
 ## Verification plan

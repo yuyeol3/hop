@@ -158,6 +158,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 15
     permissions:
+      actions: write
       contents: write
       pull-requests: write
     steps:
@@ -216,3 +217,5 @@ jobs:
               --title "chore: update rhwp to $RHWP_TAG" \
               --body "$body"
           fi
+
+          gh workflow run ci.yml --ref "$branch"
