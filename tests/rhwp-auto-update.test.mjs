@@ -17,8 +17,11 @@ test('isolates upstream candidate generation from pull request write permissions
   assert.match(generateJob, /permissions:\s+contents: read/);
   assert.match(generateJob, /persist-credentials: false/);
   assert.match(generateJob, /pnpm upstream:update -- "\$tag"/);
-  assert.match(publishJob, /permissions:\s+contents: write\s+pull-requests: write/);
+  assert.match(publishJob, /contents: write/);
+  assert.match(publishJob, /pull-requests: write/);
+  assert.match(publishJob, /actions: write/);
   assert.match(publishJob, /needs: generate-candidate/);
   assert.match(publishJob, /gh pr create/);
+  assert.match(publishJob, /gh workflow run ci\.yml --ref "\$branch"/);
   assert.doesNotMatch(publishJob, /pnpm upstream:update/);
 });
