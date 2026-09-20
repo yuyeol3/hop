@@ -114,6 +114,15 @@ export async function artifactMetadata(path) {
   };
 }
 
+export function normalizeTextArtifactLineEndings(text) {
+  return text.replaceAll('\r\n', '\n');
+}
+
+async function textArtifactSha256(path) {
+  const text = normalizeTextArtifactLineEndings(await readFile(path, 'utf8'));
+  return createHash('sha256').update(text, 'utf8').digest('hex');
+}
+
 export function repoRelativePath(path) {
   return relative(repoRoot, path).replaceAll('\\', '/');
 }
@@ -140,11 +149,13 @@ export async function buildStudioOverrideBaseline(manifest, upstream) {
   for (const entry of manifest.overrides) {
     if (entry.strategy !== 'extension' && entry.strategy !== 'fork') continue;
     const relativePath = entry.id.endsWith('.css') ? entry.id : `${entry.id}.ts`;
-    counterparts[entry.id] = (await artifactMetadata(join(upstreamStudioDir, relativePath))).sha256;
+    counterparts[entry.id] = await textArtifactSha256(join(upstreamStudioDir, relativePath));
   }
   const assets = {};
   for (const relativePath of studioMirroredAssetPaths) {
-    assets[relativePath] = (await artifactMetadata(join(upstreamDir, 'rhwp-studio', relativePath))).sha256;
+    assets[relativePath] = await textArtifactSha256(
+      join(upstreamDir, 'rhwp-studio', relativePath),
+    );
   }
   return {
     version: upstream.version,

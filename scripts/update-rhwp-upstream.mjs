@@ -9,6 +9,7 @@ import {
   cargoLockPackageEntries,
   cargoRoots,
   currentUpstreamCommit,
+  normalizeTextArtifactLineEndings,
   parsePackageVersion,
   parseRustToolchain,
   parseUpdateTag,
@@ -197,7 +198,12 @@ async function buildVendoredWasm() {
       }
     }
     for (const name of vendoredArtifactNames) {
-      await cp(join(outputDir, name), join(vendorDir, name), { recursive: true, force: true });
+      const destination = join(vendorDir, name);
+      await cp(join(outputDir, name), destination, { recursive: true, force: true });
+      if (!name.endsWith('.wasm')) {
+        const normalized = normalizeTextArtifactLineEndings(await readFile(destination, 'utf8'));
+        await writeFile(destination, normalized, 'utf8');
+      }
     }
   } finally {
     await rm(outputDir, { recursive: true, force: true });

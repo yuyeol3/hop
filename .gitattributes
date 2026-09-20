@@ -1,0 +1,2 @@
+# Vendored rhwp artifacts are verified byte-for-byte by PROVENANCE.json.
+apps/studio-host/vendor/rhwp-core/** -text
