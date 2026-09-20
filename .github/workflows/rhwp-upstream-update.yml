@@ -1,0 +1,221 @@
+name: Update rhwp upstream
+
+on:
+  schedule:
+    - cron: "17 18 * * 3"
+  workflow_dispatch:
+
+concurrency:
+  group: rhwp-upstream-update
+  cancel-in-progress: false
+
+env:
+  NODE_VERSION: "24"
+
+jobs:
+  generate-candidate:
+    name: Generate read-only candidate
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    outputs:
+      changed: ${{ steps.release.outputs.changed }}
+      tag: ${{ steps.release.outputs.tag }}
+    steps:
+      - name: Checkout main without persistent credentials
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          submodules: true
+          persist-credentials: false
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Check latest stable release
+        id: release
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          current_tag="$(node -p "require('./config/rhwp-upstream.json').tag")"
+          latest_tag="$(gh api repos/edwardkim/rhwp/releases/latest --jq '.tag_name')"
+          node --input-type=module -e \
+            'import { assertStableTag } from "./scripts/lib/rhwp-upstream.mjs"; assertStableTag(process.argv[1]);' \
+            "$latest_tag"
+
+          newest_tag="$(printf '%s\n%s\n' "$current_tag" "$latest_tag" | sort -V | tail -n 1)"
+          if [[ "$latest_tag" == "$current_tag" || "$newest_tag" != "$latest_tag" ]]; then
+            echo "changed=false" >> "$GITHUB_OUTPUT"
+            echo "tag=$current_tag" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          echo "changed=true" >> "$GITHUB_OUTPUT"
+          echo "tag=$latest_tag" >> "$GITHUB_OUTPUT"
+
+      - name: Read pinned build contract
+        if: steps.release.outputs.changed == 'true'
+        id: contract
+        shell: bash
+        run: |
+          echo "rust_toolchain=$(node -p "require('./config/rhwp-upstream.json').rustToolchain")" >> "$GITHUB_OUTPUT"
+          echo "wasm_pack_version=$(node -p "require('./config/rhwp-upstream.json').wasmPackVersion")" >> "$GITHUB_OUTPUT"
+
+      - name: Setup Rust
+        if: steps.release.outputs.changed == 'true'
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Pin Rust to upstream contract
+        if: steps.release.outputs.changed == 'true'
+        shell: bash
+        env:
+          RUST_TOOLCHAIN: ${{ steps.contract.outputs.rust_toolchain }}
+        run: |
+          rustup toolchain install "$RUST_TOOLCHAIN" --profile minimal
+          rustup target add --toolchain "$RUST_TOOLCHAIN" wasm32-unknown-unknown
+          echo "RUSTUP_TOOLCHAIN=$RUST_TOOLCHAIN" >> "$GITHUB_ENV"
+
+      - name: Cache wasm-pack
+        if: steps.release.outputs.changed == 'true'
+        id: wasm-pack-cache
+        uses: actions/cache@v5
+        with:
+          path: ~/.cargo/bin/wasm-pack
+          key: ${{ runner.os }}-wasm-pack-${{ steps.contract.outputs.wasm_pack_version }}
+
+      - name: Install pinned wasm-pack
+        if: steps.release.outputs.changed == 'true' && steps.wasm-pack-cache.outputs.cache-hit != 'true'
+        env:
+          WASM_PACK_VERSION: ${{ steps.contract.outputs.wasm_pack_version }}
+        run: cargo install wasm-pack --version "$WASM_PACK_VERSION" --locked
+
+      - name: Install Node dependencies
+        if: steps.release.outputs.changed == 'true'
+        run: pnpm install --frozen-lockfile
+
+      - name: Generate and verify candidate
+        if: steps.release.outputs.changed == 'true'
+        id: update
+        shell: bash
+        env:
+          RHWP_TAG: ${{ steps.release.outputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="$RHWP_TAG"
+          pnpm upstream:update -- "$tag" | tee rhwp-update.log
+          pnpm upstream:verify
+
+      - name: Package allowed updater changes
+        if: steps.release.outputs.changed == 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          allowed_paths='^(third_party/rhwp|config/rhwp-upstream\.json|config/rhwp-studio-overrides\.json|apps/studio-host/vendor/rhwp-core/.*|apps/studio-host/public/images/icon_small_ko_dark\.svg|apps/desktop/src-tauri/Cargo\.(toml|lock)|apps/desktop/quicklook/rust/Cargo\.(toml|lock))$'
+          unexpected="$(git diff --name-only | grep -Ev "$allowed_paths" || true)"
+          if [[ -n "$unexpected" ]]; then
+            echo "Updater changed paths outside its contract:" >&2
+            echo "$unexpected" >&2
+            exit 1
+          fi
+
+          git diff --check
+          git diff --binary --full-index -- \
+            third_party/rhwp \
+            config/rhwp-upstream.json \
+            config/rhwp-studio-overrides.json \
+            apps/studio-host/vendor/rhwp-core \
+            apps/studio-host/public/images/icon_small_ko_dark.svg \
+            apps/desktop/src-tauri/Cargo.toml \
+            apps/desktop/src-tauri/Cargo.lock \
+            apps/desktop/quicklook/rust/Cargo.toml \
+            apps/desktop/quicklook/rust/Cargo.lock \
+            > rhwp-update.patch
+          test -s rhwp-update.patch
+
+      - name: Upload candidate patch
+        if: steps.release.outputs.changed == 'true'
+        uses: actions/upload-artifact@v7
+        with:
+          name: rhwp-candidate-${{ github.run_id }}
+          path: |
+            rhwp-update.patch
+            rhwp-update.log
+          if-no-files-found: error
+          retention-days: 7
+
+  publish-pr:
+    name: Publish update pull request
+    needs: generate-candidate
+    if: needs.generate-candidate.outputs.changed == 'true'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    permissions:
+      actions: write
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Checkout main without persistent credentials
+        uses: actions/checkout@v5
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Download candidate patch
+        uses: actions/download-artifact@v7
+        with:
+          name: rhwp-candidate-${{ github.run_id }}
+          path: candidate
+
+      - name: Apply candidate and create or update pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RHWP_TAG: ${{ needs.generate-candidate.outputs.tag }}
+        run: |
+          set -euo pipefail
+          branch="automation/rhwp-upstream"
+
+          git switch -C "$branch"
+          git apply --check candidate/rhwp-update.patch
+          git apply --index candidate/rhwp-update.patch
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "chore: update rhwp to $RHWP_TAG"
+
+          gh auth setup-git
+          if git ls-remote --exit-code --heads origin "refs/heads/$branch" >/dev/null 2>&1; then
+            git fetch origin "refs/heads/$branch:refs/remotes/origin/$branch"
+          fi
+          git push --force-with-lease origin "HEAD:refs/heads/$branch"
+
+          changed_inputs="$(sed -n 's/^Review changed studio inputs: //p' candidate/rhwp-update.log | tail -n 1)"
+          if [[ -z "$changed_inputs" ]]; then
+            changed_inputs="none reported by the updater"
+          fi
+          body="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+            "Automated candidate for rhwp $RHWP_TAG." \
+            "Changed studio inputs: $changed_inputs" \
+            "CI must pass before merge. Review the generated diff and complete the product smoke tests in docs/operations/RHWP_UPDATE.md." \
+            "This pull request is intentionally not auto-merged.")"
+
+          pr_number="$(gh pr list --base main --head "$branch" --state open --json number --jq '.[0].number // empty')"
+          if [[ -n "$pr_number" ]]; then
+            gh pr edit "$pr_number" --title "chore: update rhwp to $RHWP_TAG" --body "$body"
+          else
+            gh pr create \
+              --base main \
+              --head "$branch" \
+              --title "chore: update rhwp to $RHWP_TAG" \
+              --body "$body"
+          fi
+
+          gh workflow run ci.yml --ref "$branch"
