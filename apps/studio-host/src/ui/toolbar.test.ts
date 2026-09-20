@@ -236,3 +236,42 @@ describe('Toolbar font application sequencing', () => {
     }
   });
 });
+
+describe('Toolbar upstream state compatibility', () => {
+  it('exposes disabled state to the responsive overflow controller', () => {
+    const container = {
+      style: { opacity: '', pointerEvents: '' },
+      inert: false,
+      setAttribute: vi.fn(),
+    };
+    const setEnabled = (
+      Toolbar.prototype as unknown as Record<string, (this: object, enabled: boolean) => void>
+    ).setEnabled;
+
+    setEnabled.call({ container, enabled: true }, false);
+
+    expect(container.setAttribute).toHaveBeenCalledWith('aria-disabled', 'true');
+    expect(container.inert).toBe(true);
+  });
+
+  it('reflects the active paragraph alignment in toolbar buttons', () => {
+    const left = {};
+    const center = {};
+    const setActive = vi.fn();
+    const updateParaState = (
+      Toolbar.prototype as unknown as Record<string, (this: object, props: object) => void>
+    ).updateParaState;
+
+    updateParaState.call({
+      alignButtons: [
+        { button: left, alignment: 'left' },
+        { button: center, alignment: 'center' },
+      ],
+      setActive,
+      lsSelect: { selectedIndex: 0 },
+    }, { alignment: 'center' });
+
+    expect(setActive).toHaveBeenCalledWith(left, false);
+    expect(setActive).toHaveBeenCalledWith(center, true);
+  });
+});

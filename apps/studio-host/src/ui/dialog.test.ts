@@ -100,6 +100,7 @@ class FakeElement {
 
 class FakeDocument {
   body = new FakeElement();
+  events: Event[] = [];
   private listeners = new Map<string, Array<(event: unknown) => void>>();
 
   createElement(_tag: string): FakeElement {
@@ -122,6 +123,15 @@ class FakeDocument {
 
   dispatchCapture(type: string, event: unknown) {
     this.listeners.get(`${type}:capture`)?.forEach((fn) => fn(event));
+  }
+
+  querySelector(selector: string): FakeElement | null {
+    return this.body.querySelector(selector);
+  }
+
+  dispatchEvent(event: Event): boolean {
+    this.events.push(event);
+    return true;
   }
 }
 
@@ -223,6 +233,18 @@ describe('ModalDialog', () => {
 
     dialog.hide();
     expect(overlay.isConnected).toBe(false);
+  });
+
+  it('notifies the host after the last modal closes', () => {
+    const dialog = new TestDialog();
+    const afterClose = vi.fn();
+    (dialog as TestDialog & { afterClose?: () => void }).afterClose = afterClose;
+    dialog.show();
+
+    dialog.hide();
+
+    expect(afterClose).toHaveBeenCalledOnce();
+    expect(fakeDocument.events.map((event) => event.type)).toContain('rhwp-modal-dialog-closed');
   });
 
   it('Escape key triggers hide', () => {

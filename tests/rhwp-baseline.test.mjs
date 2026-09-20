@@ -154,6 +154,58 @@ test('desktop release tests and platform builds use the upstream Rust toolchain'
   );
 });
 
+test('desktop restores normal window geometry without restoring maximized state', async () => {
+  const desktopSource = await readFile(
+    join(repoRoot, 'apps/desktop/src-tauri/src/lib.rs'),
+    'utf8',
+  );
+
+  assert.match(
+    desktopSource,
+    /with_state_flags\(StateFlags::SIZE\s*\|\s*StateFlags::POSITION\)/,
+  );
+  assert.doesNotMatch(desktopSource, /with_state_flags\([^)]*MAXIMIZED/);
+});
+
+test('Windows desktop anchors the hidden editor input to the visible caret', async () => {
+  const mainSource = await readFile(
+    join(repoRoot, 'apps/studio-host/src/main.ts'),
+    'utf8',
+  );
+
+  assert.match(mainSource, /installWindowsImeAnchor/);
+  assert.match(
+    mainSource,
+    /tauriRuntime\s*&&\s*desktopPlatform\s*===\s*['"]windows['"][\s\S]*installWindowsImeAnchor\(document, eventBus\)/,
+  );
+});
+
+test('desktop restores editor focus after the last modal closes', async () => {
+  const mainSource = await readFile(
+    join(repoRoot, 'apps/studio-host/src/main.ts'),
+    'utf8',
+  );
+
+  assert.match(mainSource, /MODAL_DIALOG_CLOSED_EVENT/);
+  assert.match(
+    mainSource,
+    /addEventListener\(MODAL_DIALOG_CLOSED_EVENT,[\s\S]*inputHandler\?\.isActive\(\)[\s\S]*inputHandler\.focus\(\)/,
+  );
+});
+
+test('HOP initializes the pinned upstream style toolbar overflow behavior', async () => {
+  const [mainSource, uiAdapter] = await Promise.all([
+    readFile(join(repoRoot, 'apps/studio-host/src/main.ts'), 'utf8'),
+    readFile(join(repoRoot, 'apps/studio-host/src/upstream/ui.ts'), 'utf8'),
+  ]);
+
+  assert.match(uiAdapter, /initStyleToolbarOverflow.*@upstream\/ui\/style-toolbar-overflow/);
+  assert.match(
+    mainSource,
+    /initStyleToolbarOverflow\(document\.getElementById\(['"]style-bar['"]\)\)/,
+  );
+});
+
 test('CI installs clippy for the upstream Rust toolchain', async () => {
   const ciWorkflow = await readFile(
     join(repoRoot, '.github/workflows/ci.yml'),

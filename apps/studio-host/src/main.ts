@@ -2,6 +2,7 @@ import { createBridge, isTauriRuntime } from '@/core/bridge-factory';
 import {
   applyDesktopChromePlatformState,
   installNonEditorContextMenuGuards,
+  installWindowsImeAnchor,
 } from '@/core/desktop-chrome';
 import { DocumentDirtyState, EventBus, initThemeSync } from '@/upstream/core';
 import type { DocumentInfo } from '@/upstream/core';
@@ -15,12 +16,18 @@ import {
   TableResizeRenderer,
 } from '@/upstream/editor';
 import { Toolbar } from '@/ui/toolbar';
-import { CommandPalette, ContextMenu, MenuBar } from '@/upstream/ui';
+import {
+  CommandPalette,
+  ContextMenu,
+  MenuBar,
+  initStyleToolbarOverflow,
+} from '@/upstream/ui';
 import { loadWebFonts } from '@/core/font-loader';
 import { loadStoredLocalFonts } from '@/core/local-fonts';
 import { isSupportedDocumentPath } from '@/core/document-files';
 import { confirmSaveBeforeReplacingDocument } from '@/upstream/commands';
 import { enhanceCustomSelects } from '@/ui/custom-select';
+import { MODAL_DIALOG_CLOSED_EVENT } from '@/ui/dialog';
 import { UpdateNotice, type UpdateNoticeActions } from '@/ui/update-notice';
 import { HomeScreen } from '@/ui/home-screen';
 import type { DesktopBridgeApi } from '@/core/tauri-bridge';
@@ -36,6 +43,7 @@ initThemeSync((effective, mode) => {
   eventBus.emit('theme-changed', { mode, effective });
   eventBus.emit('command-state-changed');
 });
+initStyleToolbarOverflow(document.getElementById('style-bar'));
 let desktopPlatform = detectDesktopPlatform();
 
 type DirtyAwareBridge = {
@@ -118,6 +126,12 @@ async function initialize(): Promise<void> {
       canvasView.getVirtualScroll(),
       canvasView.getViewportManager(),
     );
+    if (tauriRuntime && desktopPlatform === 'windows') {
+      installWindowsImeAnchor(document, eventBus);
+    }
+    document.addEventListener(MODAL_DIALOG_CLOSED_EVENT, () => {
+      if (inputHandler?.isActive()) inputHandler.focus();
+    });
     inputHandler.setEditMode(commandRuntime.getEditMode());
 
     toolbar = new Toolbar(document.getElementById('style-bar')!, wasm, eventBus, dispatcher);

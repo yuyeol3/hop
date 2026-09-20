@@ -12,6 +12,7 @@ import {
   cargoLockHasPatchSource,
   cargoLockPackageVersion,
   normalizeGitSource,
+  normalizeTextArtifactLineEndings,
   parsePackageVersion,
   parseRustToolchain,
   parseUpdateTag,
@@ -20,6 +21,7 @@ import {
   tomlSection,
   vendoredArtifactNames,
 } from '../scripts/lib/rhwp-upstream.mjs';
+import { verifyRhwpUpstream } from '../scripts/verify-rhwp-upstream.mjs';
 
 const repoRoot = dirname(dirname(fileURLToPath(import.meta.url)));
 
@@ -153,6 +155,30 @@ test('provenance covers every shipped vendored file', () => {
     'package.json',
     'LICENSE',
   ]);
+});
+
+test('normalizes vendored text artifacts independently of the build platform', () => {
+  assert.equal(
+    normalizeTextArtifactLineEndings('first\r\nsecond\nthird\r\n'),
+    'first\nsecond\nthird\n',
+  );
+});
+
+test('vendored artifacts bypass checkout line-ending conversion', () => {
+  const attributes = git([
+    'check-attr',
+    'text',
+    '--',
+    'apps/studio-host/vendor/rhwp-core/rhwp.js',
+    'apps/studio-host/vendor/rhwp-core/rhwp.d.ts',
+  ]).stdout;
+
+  assert.match(attributes, /rhwp\.js: text: unset/);
+  assert.match(attributes, /rhwp\.d\.ts: text: unset/);
+});
+
+test('upstream override baselines are independent of checkout line endings', async () => {
+  await assert.doesNotReject(verifyRhwpUpstream());
 });
 
 test('update command refuses missing, moving, or malformed refs before changing the checkout', () => {
