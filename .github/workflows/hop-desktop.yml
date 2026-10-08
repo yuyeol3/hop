@@ -775,6 +775,31 @@ jobs:
           path: artifacts
           merge-multiple: false
 
+      # download-artifact extracts a lone artifact straight into `path` without its name folder.
+      # The asset steps below look for hop-desktop-<platform>-* folders, so restore that layout.
+      - name: Normalize single-platform artifact layout
+        shell: bash
+        env:
+          MATRIX: ${{ needs.prepare.outputs.matrix }}
+        run: |
+          set -euo pipefail
+          shopt -s nullglob dotglob
+          named=(artifacts/hop-desktop-*/)
+          if (( ${#named[@]} > 0 )); then
+            exit 0
+          fi
+          platforms="$(jq -r '.include[].name' <<< "$MATRIX")"
+          if [[ "$(wc -l <<< "$platforms")" != "1" ]]; then
+            echo "::error::Expected per-platform artifact folders for a multi-platform release."
+            exit 1
+          fi
+          target="artifacts/hop-desktop-${platforms}-bundle"
+          staging="$(mktemp -d)"
+          mv artifacts/* "$staging"/
+          mkdir -p "$target"
+          mv "$staging"/* "$target"/
+          find artifacts -maxdepth 2 -type d
+
       - name: Prepare release assets
         id: assets
         shell: bash
