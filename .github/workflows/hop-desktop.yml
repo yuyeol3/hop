@@ -179,8 +179,10 @@ jobs:
               exit 1
             fi
 
-            if [[ "${{ inputs.macos_arm64 }}" != "true" || "${{ inputs.macos_x64 }}" != "true" ]]; then
-              echo "::error::Release builds must include both macOS arm64 and macOS x64 because the README and website link directly to both signed/notarized .dmg assets."
+            # Forks without Apple signing credentials release Windows/Linux only. When macOS is
+            # released, both architectures ship so the README .dmg links stay valid.
+            if [[ "${{ inputs.macos_arm64 }}" != "${{ inputs.macos_x64 }}" ]]; then
+              echo "::error::Release builds must include both macOS arm64 and macOS x64, or neither."
               exit 1
             fi
 
@@ -890,8 +892,12 @@ jobs:
           copy_updater_asset "linux-arm64" "linux-aarch64-deb" "HOP-linux-arm64.deb" "*.deb"
           copy_updater_asset "linux-arm64" "linux-aarch64" "HOP-linux-arm64.deb" "*.deb"
 
-          if [[ ! -f "release-assets/HOP-macos-arm64.dmg" || ! -f "release-assets/HOP-macos-x64.dmg" ]]; then
-            echo "::error::macOS releases must include both HOP-macos-arm64.dmg and HOP-macos-x64.dmg."
+          has_macos_arm64="false"
+          has_macos_x64="false"
+          [[ -f "release-assets/HOP-macos-arm64.dmg" ]] && has_macos_arm64="true"
+          [[ -f "release-assets/HOP-macos-x64.dmg" ]] && has_macos_x64="true"
+          if [[ "$has_macos_arm64" != "$has_macos_x64" ]]; then
+            echo "::error::macOS releases must include both HOP-macos-arm64.dmg and HOP-macos-x64.dmg, or neither."
             exit 1
           fi
 

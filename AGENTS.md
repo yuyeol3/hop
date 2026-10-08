@@ -17,7 +17,7 @@ Core stack:
 ```text
 apps/
   desktop/       Tauri desktop shell and native Rust code
-  studio-host/   HOP overlay for upstream rhwp-studio
+  studio-host/   builds unmodified upstream rhwp-studio + HOP host script
 third_party/
   rhwp/          read-only upstream submodule
 assets/          icons, fonts, screenshots
@@ -80,7 +80,7 @@ pnpm upstream:update -- vX.Y.Z
 Always pass the intended stable release tag explicitly. Then run `pnpm upstream:verify` and the
 focused product checks; never update from a moving branch such as `main`.
 
-After an upstream update, check the submodule pointer, `apps/studio-host` alias/override compatibility, Rust native API compatibility, and HOP-specific file, print, window, and drag/drop flows.
+After an upstream update, check the submodule pointer, the upstream public surfaces checked by `tests/rhwp-boundary.test.mjs`, Rust native API compatibility, and the desktop smoke test (open, save, reopen).
 
 ## Testing
 
@@ -107,7 +107,7 @@ If `which node` resolves to `/Applications/Codex.app/.../node`, prefer an extern
 ```bash
 export PATH="$HOME/.nvm/versions/node/v24.4.1/bin:$PATH"
 pnpm run build:studio
-pnpm --filter @golbin/hop-studio-host exec vitest run src/core/tauri-bridge.test.ts
+pnpm --filter @golbin/hop-studio-host exec vitest run host/document-controller.test.ts
 ```
 
 Use `which node` to confirm the external Node is selected.

@@ -3,10 +3,9 @@ import { tmpdir } from 'node:os';
 import { basename, join } from 'node:path';
 import {
   assertStableTag,
-  buildStudioOverrideBaseline,
+  cargoPatchesForRoot,
   cargoPatchTomlPattern,
   cargoLockPackageVersion,
-  cargoLockPackageEntries,
   cargoRoots,
   currentUpstreamCommit,
   normalizeTextArtifactLineEndings,
@@ -16,12 +15,14 @@ import {
   provenancePath,
   readJson,
   repoRelativePath,
+  repoRoot,
+  resolveUpstreamCargoPatch,
   run,
+  studioHostPackagePath,
+  syncStudioHostPackage,
   upstreamDir,
   upstreamLockPath,
-  studioOverrideManifestPath,
-  studioHostDir,
-  studioMirroredAssetPaths,
+  upstreamStudioPackagePath,
   synchronizeCargoPatchToml,
   tomlSection,
   vendoredArtifactNames,
@@ -43,7 +44,6 @@ await verifyRhwpUpstream();
 
 const previousCommit = currentUpstreamCommit();
 const previousLock = await readJson(upstreamLockPath);
-const previousOverrideManifest = await readJson(studioOverrideManifestPath);
 const backupDir = await mkdtemp(join(tmpdir(), 'hop-rhwp-update-backup-'));
 let backupReady = false;
 
@@ -74,22 +74,13 @@ try {
   await buildVendoredWasm();
 
   await updateCargoLocks(previousLock.version, target.cargoPatches, target.rustToolchain);
-  await syncStudioAssets();
-  const nextOverrideManifest = {
-    ...previousOverrideManifest,
-    upstream: await buildStudioOverrideBaseline(previousOverrideManifest, target),
-  };
-  const changedInputs = changedStudioInputs(previousOverrideManifest, nextOverrideManifest);
+  await syncStudioHostDependencies();
   await writeJson(upstreamLockPath, target);
-  await writeJson(studioOverrideManifestPath, nextOverrideManifest);
   await writeJson(provenancePath, await buildProvenance(target));
   await verifyRhwpUpstream();
 
   console.log(`rhwp candidate prepared: ${tag} (${targetCommit})`);
-  if (changedInputs.length > 0) {
-    console.log(`Review changed studio inputs: ${changedInputs.join(', ')}`);
-  }
-  console.log('Next: review the diff, run pnpm upstream:verify, then complete product smoke tests.');
+  console.log('Next: run pnpm upstream:verify and the desktop smoke test.');
 } catch (error) {
   if (!backupReady) throw error;
   console.error(`rhwp update failed; restoring ${previousLock.tag}`);
@@ -118,9 +109,9 @@ async function assertSafeWorkingState() {
   }
   const owned = [
     'config/rhwp-upstream.json',
-    'config/rhwp-studio-overrides.json',
     'apps/studio-host/vendor/rhwp-core',
-    ...studioMirroredAssetPaths.map((path) => `apps/studio-host/${path}`),
+    'apps/studio-host/package.json',
+    'pnpm-lock.yaml',
     ...cargoRoots.map((root) => `${repoRelativePath(root)}/Cargo.lock`),
     ...cargoRoots.map((root) => `${repoRelativePath(root)}/Cargo.toml`),
   ];
@@ -155,22 +146,18 @@ async function resolveHopCargoPatches(existing) {
   const upstreamCargoLock = await readFile(join(upstreamDir, 'Cargo.lock'), 'utf8').catch(() => '');
   // Cargo patches are HOP-owned product policy. If upstream carries the same
   // patch, follow its pinned source; otherwise retain HOP's reviewed pin.
-  if (!/^svg2pdf\s*=/m.test(tomlSection(cargoToml, 'patch.crates-io'))) return existing;
-  const source = cargoLockPackageEntries(upstreamCargoLock, 'svg2pdf')
-    .map((entry) => entry.source?.match(/^git\+([^?#]+)(?:\?[^#]*)?#([0-9a-f]{40})$/))
-    .find(Boolean);
-  if (!source?.[1] || !source[2]) throw new Error('upstream svg2pdf patch is not pinned in Cargo.lock');
-  return { ...existing, svg2pdf: { git: source[1], rev: source[2] } };
+  const svg2pdf = resolveUpstreamCargoPatch(cargoToml, upstreamCargoLock, 'svg2pdf');
+  return svg2pdf ? { ...existing, svg2pdf } : existing;
 }
 
 async function assertHopCargoPatches(patches) {
   for (const root of cargoRoots) {
     const cargoToml = await readFile(join(root, 'Cargo.toml'), 'utf8');
     const patchSection = tomlSection(cargoToml, 'patch.crates-io');
-    for (const [name, patch] of Object.entries(patches)) {
+    for (const [name, patch] of Object.entries(cargoPatchesForRoot(patches, root))) {
       const expected = cargoPatchTomlPattern(name, patch);
       if (!expected.test(patchSection)) {
-        throw new Error(`${basename(root)}/Cargo.toml must pin ${name} to ${patch.git}#${patch.rev}`);
+        throw new Error(`${basename(root)}/Cargo.toml must pin ${name} to ${patch.path ?? `${patch.git}#${patch.rev}`}`);
       }
     }
   }
@@ -180,7 +167,11 @@ async function syncHopCargoPatches(previousPatches, nextPatches) {
   for (const root of cargoRoots) {
     const path = join(root, 'Cargo.toml');
     const cargoToml = await readFile(path, 'utf8');
-    await writeFile(path, synchronizeCargoPatchToml(cargoToml, previousPatches, nextPatches));
+    await writeFile(path, synchronizeCargoPatchToml(
+      cargoToml,
+      cargoPatchesForRoot(previousPatches, root),
+      cargoPatchesForRoot(nextPatches, root),
+    ));
   }
 }
 
@@ -222,23 +213,20 @@ async function updateCargoLocks(previousVersion, patches, rustToolchain) {
   }
 }
 
-async function syncStudioAssets() {
-  for (const relativePath of studioMirroredAssetPaths) {
-    await cp(
-      join(upstreamDir, 'rhwp-studio', relativePath),
-      join(studioHostDir, relativePath),
-      { force: true },
-    );
-  }
+/** Upstream studio is built from source, so its runtime dependencies follow upstream. */
+async function syncStudioHostDependencies() {
+  const hostPackage = await readJson(studioHostPackagePath);
+  const nextPackage = syncStudioHostPackage(hostPackage, await readJson(upstreamStudioPackagePath));
+  if (JSON.stringify(nextPackage) === JSON.stringify(hostPackage)) return;
+  await writeJson(studioHostPackagePath, nextPackage);
+  run('pnpm', ['install', '--lockfile-only'], { stdio: 'inherit', shell: process.platform === 'win32' });
 }
 
 async function backupOwnedFiles(backup) {
   await cp(vendorDir, join(backup, 'vendor'), { recursive: true });
   await cp(upstreamLockPath, join(backup, 'rhwp-upstream.json'));
-  await cp(studioOverrideManifestPath, join(backup, 'rhwp-studio-overrides.json'));
-  for (const [index, relativePath] of studioMirroredAssetPaths.entries()) {
-    await cp(join(studioHostDir, relativePath), join(backup, `studio-asset-${index}`));
-  }
+  await cp(studioHostPackagePath, join(backup, 'studio-host-package.json'));
+  await cp(join(repoRoot, 'pnpm-lock.yaml'), join(backup, 'pnpm-lock.yaml'));
   for (const [index, root] of cargoRoots.entries()) {
     await cp(join(root, 'Cargo.lock'), join(backup, `Cargo-${index}.lock`));
     await cp(join(root, 'Cargo.toml'), join(backup, `Cargo-${index}.toml`));
@@ -249,25 +237,10 @@ async function restoreOwnedFiles(backup) {
   await rm(vendorDir, { recursive: true, force: true });
   await cp(join(backup, 'vendor'), vendorDir, { recursive: true });
   await cp(join(backup, 'rhwp-upstream.json'), upstreamLockPath);
-  await cp(join(backup, 'rhwp-studio-overrides.json'), studioOverrideManifestPath);
-  for (const [index, relativePath] of studioMirroredAssetPaths.entries()) {
-    await cp(join(backup, `studio-asset-${index}`), join(studioHostDir, relativePath));
-  }
+  await cp(join(backup, 'studio-host-package.json'), studioHostPackagePath);
+  await cp(join(backup, 'pnpm-lock.yaml'), join(repoRoot, 'pnpm-lock.yaml'));
   for (const [index, root] of cargoRoots.entries()) {
     await cp(join(backup, `Cargo-${index}.lock`), join(root, 'Cargo.lock'));
     await cp(join(backup, `Cargo-${index}.toml`), join(root, 'Cargo.toml'));
   }
-}
-
-function changedStudioInputs(previous, next) {
-  const changed = [];
-  for (const field of ['counterparts', 'assets']) {
-    const before = previous.upstream?.[field] ?? {};
-    const after = next.upstream?.[field] ?? {};
-    const ids = new Set([...Object.keys(before), ...Object.keys(after)]);
-    for (const id of ids) {
-      if (before[id] !== after[id]) changed.push(field === 'assets' ? `asset:${id}` : id);
-    }
-  }
-  return changed.sort();
 }

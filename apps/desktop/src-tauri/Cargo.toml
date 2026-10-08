@@ -1,6 +1,6 @@
 [package]
 name = "hop-desktop"
-version = "0.4.4"
+version = "0.5.0"
 edition = "2021"
 description = "HOP - Open HWP desktop app"
 license = "MIT"
@@ -29,13 +29,14 @@ tauri-plugin-window-state = "2"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 uuid = { version = "1", features = ["v4", "serde"] }
+percent-encoding = "2.3"
 tempfile = "3"
 open = "5"
 usvg = "0.45"
 
 [patch.crates-io]
 # rhwp #2269: keep PDF object/resource ordering deterministic until svg2pdf is replaced upstream.
-svg2pdf = { git = "https://github.com/edwardkim/svg2pdf", rev = "2caeb0a038f9128b79833d803b94c2667565c4da" }
+svg2pdf = { path = "../../../third_party/rhwp/vendor/svg2pdf" }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2-app-kit = { version = "0.3.2", default-features = false, features = ["std", "NSDocumentController"] }

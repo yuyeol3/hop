@@ -1,15 +1,15 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
 export const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const upstreamDir = join(repoRoot, 'third_party/rhwp');
 export const upstreamLockPath = join(repoRoot, 'config/rhwp-upstream.json');
-export const studioOverrideManifestPath = join(repoRoot, 'config/rhwp-studio-overrides.json');
-export const upstreamStudioDir = join(upstreamDir, 'rhwp-studio/src');
 export const studioHostDir = join(repoRoot, 'apps/studio-host');
+export const studioHostPackagePath = join(studioHostDir, 'package.json');
+export const upstreamStudioPackagePath = join(upstreamDir, 'rhwp-studio/package.json');
 export const vendorDir = join(repoRoot, 'apps/studio-host/vendor/rhwp-core');
 export const provenancePath = join(vendorDir, 'PROVENANCE.json');
 export const cargoRoots = [
@@ -29,7 +29,10 @@ export const vendoredArtifactNames = [
   'package.json',
   'LICENSE',
 ];
-export const studioMirroredAssetPaths = ['public/images/icon_small_ko_dark.svg'];
+// studio-host builds upstream rhwp-studio from source, so it installs upstream's runtime
+// dependencies and uses the same build tool ranges. Everything else in it is HOP-owned.
+export const hostOnlyStudioDependencies = ['@tauri-apps/api', '@tauri-apps/plugin-dialog'];
+export const mirroredStudioDevDependencies = ['typescript', 'vite'];
 
 export async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'));
@@ -45,6 +48,8 @@ export function run(command, args, options = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...options.env },
     stdio: options.stdio ?? 'pipe',
+    // Windows package-manager shims (pnpm.cmd) only resolve through a shell.
+    shell: options.shell ?? false,
   });
   if (result.status !== 0) {
     const details = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
@@ -118,11 +123,6 @@ export function normalizeTextArtifactLineEndings(text) {
   return text.replaceAll('\r\n', '\n');
 }
 
-async function textArtifactSha256(path) {
-  const text = normalizeTextArtifactLineEndings(await readFile(path, 'utf8'));
-  return createHash('sha256').update(text, 'utf8').digest('hex');
-}
-
 export function repoRelativePath(path) {
   return relative(repoRoot, path).replaceAll('\\', '/');
 }
@@ -144,25 +144,21 @@ export async function buildProvenance(lock) {
   };
 }
 
-export async function buildStudioOverrideBaseline(manifest, upstream) {
-  const counterparts = {};
-  for (const entry of manifest.overrides) {
-    if (entry.strategy !== 'extension' && entry.strategy !== 'fork') continue;
-    const relativePath = entry.id.endsWith('.css') ? entry.id : `${entry.id}.ts`;
-    counterparts[entry.id] = await textArtifactSha256(join(upstreamStudioDir, relativePath));
+/** studio-host package.json with upstream runtime dependencies and build tool ranges applied. */
+export function syncStudioHostPackage(hostPackage, upstreamPackage) {
+  const hostOnly = Object.entries(hostPackage.dependencies ?? {})
+    .filter(([name]) => hostOnlyStudioDependencies.includes(name));
+  const dependencies = Object.fromEntries(
+    [...hostOnly, ...Object.entries(upstreamPackage.dependencies ?? {})]
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const devDependencies = { ...hostPackage.devDependencies };
+  for (const name of mirroredStudioDevDependencies) {
+    const range = upstreamPackage.devDependencies?.[name];
+    if (!range) throw new Error(`upstream rhwp-studio no longer declares ${name}`);
+    devDependencies[name] = range;
   }
-  const assets = {};
-  for (const relativePath of studioMirroredAssetPaths) {
-    assets[relativePath] = await textArtifactSha256(
-      join(upstreamDir, 'rhwp-studio', relativePath),
-    );
-  }
-  return {
-    version: upstream.version,
-    commit: upstream.commit,
-    counterparts,
-    assets,
-  };
+  return { ...hostPackage, dependencies, devDependencies };
 }
 
 export function currentUpstreamCommit() {
@@ -193,8 +189,51 @@ export function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Upstream either pins a patch to a git revision or vendors it inside its own checkout.
+// Path patches are recorded relative to the upstream checkout.
+export function resolveUpstreamCargoPatch(cargoToml, cargoLock, crateName) {
+  const linePattern = new RegExp(`^${escapeRegExp(crateName)}\\s*=\\s*\\{([^}]*)\\}`, 'm');
+  const declaration = tomlSection(cargoToml, 'patch.crates-io').match(linePattern)?.[1];
+  if (declaration === undefined) return null;
+
+  const path = declaration.match(/\bpath\s*=\s*"([^"]+)"/)?.[1];
+  if (path !== undefined) {
+    if (isAbsolute(path) || /^[A-Za-z]:/.test(path) || path.split(/[\\/]/).includes('..')) {
+      throw new Error(`upstream ${crateName} patch path must stay inside the upstream checkout: ${path}`);
+    }
+    return { path };
+  }
+
+  const source = cargoLockPackageEntries(cargoLock, crateName)
+    .map((entry) => entry.source?.match(/^git\+([^?#]+)(?:\?[^#]*)?#([0-9a-f]{40})$/))
+    .find(Boolean);
+  if (!source) throw new Error(`upstream ${crateName} patch is not pinned in Cargo.lock`);
+  return { git: source[1], rev: source[2] };
+}
+
+export function cargoPatchesForRoot(patches, cargoRoot) {
+  return Object.fromEntries(Object.entries(patches).map(([crateName, patch]) => [
+    crateName,
+    patch.path === undefined
+      ? patch
+      : { path: relative(cargoRoot, join(upstreamDir, patch.path)).replaceAll('\\', '/') },
+  ]));
+}
+
+function cargoPatchDeclaration(crateName, patch) {
+  if (patch.path !== undefined) return `${crateName} = { path = ${JSON.stringify(patch.path)} }`;
+  return `${crateName} = { git = ${JSON.stringify(patch.git)}, rev = ${JSON.stringify(patch.rev)} }`;
+}
+
 export function cargoPatchTomlPattern(crateName, patch) {
   const crate = escapeRegExp(crateName);
+  if (patch.path !== undefined) {
+    const path = escapeRegExp(patch.path);
+    return new RegExp(
+      `^${crate}\\s*=\\s*\\{(?=[^}]*path\\s*=\\s*"${path}")(?![^}]*git\\s*=)[^}]*\\}[^\\S\\r\\n]*$`,
+      'm',
+    );
+  }
   const git = escapeRegExp(patch.git);
   const rev = escapeRegExp(patch.rev);
   return new RegExp(
@@ -220,7 +259,7 @@ export function synchronizeCargoPatchToml(toml, previousPatches, nextPatches) {
       continue;
     }
 
-    const declaration = `${crateName} = { git = ${JSON.stringify(next.git)}, rev = ${JSON.stringify(next.rev)} }`;
+    const declaration = cargoPatchDeclaration(crateName, next);
     if (linePattern.test(patchSection)) {
       patchSection = patchSection.replace(linePattern, declaration);
       continue;
@@ -232,6 +271,8 @@ export function synchronizeCargoPatchToml(toml, previousPatches, nextPatches) {
 
 export function cargoLockHasPatchSource(lock, crateName, patch) {
   return cargoLockPackageEntries(lock, crateName).some(({ source }) => {
+    // Cargo records path dependencies without a source.
+    if (patch.path !== undefined) return source === undefined;
     const parsed = source?.match(/^git\+([^?#]+)(?:\?[^#]*)?#([0-9a-f]{40})$/);
     return parsed?.[1] === patch.git && parsed[2] === patch.rev;
   });

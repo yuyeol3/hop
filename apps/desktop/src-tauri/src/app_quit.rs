@@ -1,36 +1,41 @@
+//! Closes every window one at a time so each studio can ask to save, then exits or applies a
+//! downloaded update. Any window that stays open cancels the whole sequence.
 use std::collections::VecDeque;
 
-use tauri::{AppHandle, Manager};
-#[cfg(target_os = "macos")]
-use tauri::{Emitter, RunEvent};
+use tauri::{AppHandle, Emitter, Manager, RunEvent};
 
-use crate::state::AppState;
+use crate::app_state::AppState;
 
-#[cfg(target_os = "macos")]
 const APP_QUIT_REQUEST_EVENT: &str = "hop-app-quit-requested";
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum QuitPurpose {
+    #[default]
+    Exit,
+    ApplyUpdate,
+}
 
 #[derive(Default)]
 pub struct AppQuitState {
     pending_window_labels: VecDeque<String>,
+    purpose: QuitPurpose,
 }
 
-#[cfg(any(target_os = "macos", test))]
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum QuitAdvance {
     Idle,
     Next(String),
-    Complete,
+    Complete(QuitPurpose),
 }
 
 impl AppQuitState {
-    #[cfg(any(target_os = "macos", test))]
     pub fn is_in_progress(&self) -> bool {
         !self.pending_window_labels.is_empty()
     }
 
-    #[cfg(any(target_os = "macos", test))]
-    pub fn begin(&mut self, labels: Vec<String>) -> Option<String> {
+    pub fn begin(&mut self, labels: Vec<String>, purpose: QuitPurpose) -> Option<String> {
         self.pending_window_labels = labels.into();
+        self.purpose = purpose;
         self.pending_window_labels.front().cloned()
     }
 
@@ -38,7 +43,6 @@ impl AppQuitState {
         self.pending_window_labels.clear();
     }
 
-    #[cfg(any(target_os = "macos", test))]
     pub fn advance_after_close(&mut self, closed_label: &str) -> QuitAdvance {
         if self.pending_window_labels.is_empty() {
             return QuitAdvance::Idle;
@@ -53,13 +57,12 @@ impl AppQuitState {
 
         match self.pending_window_labels.front() {
             Some(next) => QuitAdvance::Next(next.clone()),
-            None => QuitAdvance::Complete,
+            None => QuitAdvance::Complete(self.purpose),
         }
     }
 }
 
-#[cfg(target_os = "macos")]
-pub(crate) fn request_app_quit(app: &AppHandle) -> Result<(), String> {
+pub(crate) fn request_quit(app: &AppHandle, purpose: QuitPurpose) -> Result<(), String> {
     let next_label = {
         let state = app.state::<AppState>();
         let mut quit_requests = state
@@ -69,15 +72,12 @@ pub(crate) fn request_app_quit(app: &AppHandle) -> Result<(), String> {
         if quit_requests.is_in_progress() {
             return Ok(());
         }
-        quit_requests.begin(ordered_quit_labels(app))
+        quit_requests.begin(ordered_quit_labels(app), purpose)
     };
 
     match next_label {
         Some(label) => emit_app_quit_request(app, &label),
-        None => {
-            app.exit(0);
-            Ok(())
-        }
+        None => finish(app, purpose),
     }
 }
 
@@ -90,12 +90,13 @@ pub(crate) fn cancel_app_quit_request(app: &AppHandle) -> Result<(), String> {
     Ok(())
 }
 
-#[cfg(target_os = "macos")]
 pub(crate) fn handle_run_event(app: &AppHandle, event: &RunEvent) -> Result<(), String> {
     match event {
+        // macOS keeps the app alive after its last window; Cmd+Q arrives here.
+        #[cfg(target_os = "macos")]
         RunEvent::ExitRequested { code, api, .. } if code.is_none() => {
             api.prevent_exit();
-            request_app_quit(app)
+            request_quit(app, QuitPurpose::Exit)
         }
         RunEvent::WindowEvent {
             label,
@@ -106,7 +107,6 @@ pub(crate) fn handle_run_event(app: &AppHandle, event: &RunEvent) -> Result<(), 
     }
 }
 
-#[cfg(target_os = "macos")]
 fn handle_quit_window_destroyed(app: &AppHandle, label: &str) -> Result<(), String> {
     let advance = {
         let state = app.state::<AppState>();
@@ -120,14 +120,20 @@ fn handle_quit_window_destroyed(app: &AppHandle, label: &str) -> Result<(), Stri
     match advance {
         QuitAdvance::Idle => Ok(()),
         QuitAdvance::Next(next_label) => emit_app_quit_request(app, &next_label),
-        QuitAdvance::Complete => {
-            app.exit(0);
-            Ok(())
-        }
+        QuitAdvance::Complete(purpose) => finish(app, purpose),
     }
 }
 
-#[cfg(target_os = "macos")]
+fn finish(app: &AppHandle, purpose: QuitPurpose) -> Result<(), String> {
+    match purpose {
+        QuitPurpose::Exit => {
+            app.exit(0);
+            Ok(())
+        }
+        QuitPurpose::ApplyUpdate => crate::updates::apply_ready_update(app),
+    }
+}
+
 fn emit_app_quit_request(app: &AppHandle, label: &str) -> Result<(), String> {
     app.emit_to(label, APP_QUIT_REQUEST_EVENT, serde_json::json!({}))
         .map_err(|e| {
@@ -136,7 +142,6 @@ fn emit_app_quit_request(app: &AppHandle, label: &str) -> Result<(), String> {
         })
 }
 
-#[cfg(target_os = "macos")]
 fn ordered_quit_labels(app: &AppHandle) -> Vec<String> {
     let mut labels: Vec<String> = app.webview_windows().keys().cloned().collect();
     labels.sort();
@@ -149,26 +154,39 @@ fn ordered_quit_labels(app: &AppHandle) -> Vec<String> {
 
 #[cfg(test)]
 mod tests {
-    use super::{AppQuitState, QuitAdvance};
+    use super::{AppQuitState, QuitAdvance, QuitPurpose};
 
     #[test]
     fn app_quit_state_advances_windows_in_order() {
         let mut state = AppQuitState::default();
         assert_eq!(
-            state.begin(vec!["main".to_string(), "main2".to_string()]),
+            state.begin(vec!["main".to_string(), "main2".to_string()], QuitPurpose::Exit),
             Some("main".to_string())
         );
         assert_eq!(
             state.advance_after_close("main"),
             QuitAdvance::Next("main2".to_string())
         );
-        assert_eq!(state.advance_after_close("main2"), QuitAdvance::Complete);
+        assert_eq!(
+            state.advance_after_close("main2"),
+            QuitAdvance::Complete(QuitPurpose::Exit)
+        );
+    }
+
+    #[test]
+    fn app_quit_state_reports_update_purpose_on_completion() {
+        let mut state = AppQuitState::default();
+        state.begin(vec!["main".to_string()], QuitPurpose::ApplyUpdate);
+        assert_eq!(
+            state.advance_after_close("main"),
+            QuitAdvance::Complete(QuitPurpose::ApplyUpdate)
+        );
     }
 
     #[test]
     fn app_quit_state_ignores_unrelated_closed_windows() {
         let mut state = AppQuitState::default();
-        state.begin(vec!["main".to_string()]);
+        state.begin(vec!["main".to_string()], QuitPurpose::Exit);
         assert_eq!(
             state.advance_after_close("other"),
             QuitAdvance::Next("main".to_string())
@@ -179,7 +197,7 @@ mod tests {
     #[test]
     fn app_quit_state_can_be_cancelled() {
         let mut state = AppQuitState::default();
-        state.begin(vec!["main".to_string()]);
+        state.begin(vec!["main".to_string()], QuitPurpose::Exit);
         state.cancel();
         assert_eq!(state.advance_after_close("main"), QuitAdvance::Idle);
         assert!(!state.is_in_progress());

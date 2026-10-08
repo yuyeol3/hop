@@ -1,0 +1,40 @@
+name: Merge rhwp update
+
+# The updater opens automation/rhwp-upstream and dispatches HOP CI on it. When that CI run passes
+# (unit tests, upstream contract checks and the Windows desktop smoke test), merge exactly the
+# commit it verified.
+on:
+  workflow_run:
+    workflows: ["HOP CI"]
+    types: [completed]
+
+permissions: {}
+
+jobs:
+  merge:
+    name: Merge verified rhwp update
+    if: >-
+      github.event.workflow_run.conclusion == 'success' &&
+      github.event.workflow_run.head_branch == 'automation/rhwp-upstream' &&
+      github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    permissions:
+      contents: write
+      pull-requests: write
+    steps:
+      - name: Merge the update pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+        run: |
+          set -euo pipefail
+          pr_number="$(gh pr list --base main --head automation/rhwp-upstream --state open \
+            --json number --jq '.[0].number // empty')"
+          if [[ -z "$pr_number" ]]; then
+            echo "No open rhwp update pull request."
+            exit 0
+          fi
+          gh pr merge "$pr_number" --squash --delete-branch --match-head-commit "$HEAD_SHA"

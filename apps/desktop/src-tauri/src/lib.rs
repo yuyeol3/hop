@@ -1,5 +1,7 @@
 mod app_quit;
+mod app_state;
 mod commands;
+mod document_files;
 mod font_catalog;
 #[cfg(target_os = "linux")]
 mod linux_runtime;
@@ -11,7 +13,7 @@ mod pdf_export;
 mod pdf_font_fallbacks;
 mod pending_open;
 mod recent_documents;
-mod state;
+mod smoke;
 #[cfg(any(target_os = "macos", windows, target_os = "linux"))]
 mod updates;
 mod windows;
@@ -23,17 +25,14 @@ use tauri::RunEvent;
 use tauri::{AppHandle, Emitter, Manager};
 use tauri_plugin_window_state::StateFlags;
 
+use app_state::AppState;
 use commands::{
-    cancel_app_quit, check_external_modification, clear_recent_documents, close_document,
-    commit_staged_hwp_save, create_document, create_editor_window, desktop_platform,
-    destroy_current_window, export_pdf, export_pdf_from_hwp_path, list_local_fonts,
-    list_recent_documents, mark_document_dirty, mutate_document, note_finder_recent_document,
-    open_document_tracking, prepare_document_open, prepare_staged_hwp_pdf_export,
-    prepare_staged_hwp_save, print_webview, query_document, read_local_font,
-    record_recent_document, render_document_preview, render_page_svg, reveal_in_folder,
-    take_pending_open_paths,
+    cancel_app_quit, clear_recent_documents, create_editor_window, destroy_current_window,
+    export_pdf_bytes, file_fingerprint_of, list_local_fonts, list_recent_documents,
+    new_document_bytes, open_documents_in_new_windows, print_webview, read_document,
+    read_local_font, record_recent_document, take_pending_open_paths, write_document,
 };
-use state::AppState;
+use smoke::{smoke_config, smoke_exit, smoke_log};
 use updates::{get_update_state, restart_to_apply_update, start_update_install};
 
 pub fn run() {
@@ -84,34 +83,25 @@ pub fn run() {
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![
-            create_document,
+            read_document,
+            write_document,
+            file_fingerprint_of,
+            new_document_bytes,
+            export_pdf_bytes,
             create_editor_window,
-            close_document,
-            mark_document_dirty,
-            render_page_svg,
-            query_document,
-            mutate_document,
-            export_pdf,
-            export_pdf_from_hwp_path,
+            open_documents_in_new_windows,
+            take_pending_open_paths,
             print_webview,
             destroy_current_window,
             cancel_app_quit,
-            desktop_platform,
             list_local_fonts,
             read_local_font,
-            prepare_document_open,
-            open_document_tracking,
-            prepare_staged_hwp_pdf_export,
-            prepare_staged_hwp_save,
-            commit_staged_hwp_save,
-            check_external_modification,
-            take_pending_open_paths,
-            reveal_in_folder,
             list_recent_documents,
             clear_recent_documents,
             record_recent_document,
-            note_finder_recent_document,
-            render_document_preview,
+            smoke_config,
+            smoke_log,
+            smoke_exit,
             get_update_state,
             start_update_install,
             restart_to_apply_update,
@@ -119,25 +109,20 @@ pub fn run() {
         .build(tauri::generate_context!())
         .expect("failed to build HOP desktop app");
 
-    app.run(|_app, _event| {
+    app.run(|app, event| {
         #[cfg(target_os = "macos")]
-        {
-            let app = _app;
-            let event = _event;
+        if let RunEvent::Opened { urls } = &event {
+            let paths = urls
+                .clone()
+                .into_iter()
+                .filter_map(|url| url.to_file_path().ok())
+                .filter_map(document_path_from_path)
+                .collect();
+            queue_open_paths(app, paths);
+        }
 
-            if let RunEvent::Opened { urls } = &event {
-                let paths = urls
-                    .clone()
-                    .into_iter()
-                    .filter_map(|url| url.to_file_path().ok())
-                    .filter_map(document_path_from_path)
-                    .collect();
-                queue_open_paths(app, paths);
-            }
-
-            if let Err(error) = app_quit::handle_run_event(app, &event) {
-                eprintln!("[quit] 앱 종료 흐름 처리 실패: {}", error);
-            }
+        if let Err(error) = app_quit::handle_run_event(app, &event) {
+            eprintln!("[quit] 앱 종료 흐름 처리 실패: {}", error);
         }
     });
 }
@@ -159,8 +144,7 @@ fn queue_open_paths(app: &AppHandle, paths: Vec<String>) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
-fn open_paths_in_new_windows(app: &AppHandle, paths: Vec<String>) {
+pub(crate) fn open_paths_in_new_windows(app: &AppHandle, paths: Vec<String>) {
     for path in paths {
         if let Err(error) = open_path_in_new_window(app, path) {
             eprintln!("[open] 새 창 파일 열기 준비 실패: {}", error);
@@ -168,7 +152,6 @@ fn open_paths_in_new_windows(app: &AppHandle, paths: Vec<String>) {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
 fn open_path_in_new_window(app: &AppHandle, path: String) -> Result<(), String> {
     let label = crate::windows::new_editor_window_label();
     app.state::<AppState>()

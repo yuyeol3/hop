@@ -1,10 +1,10 @@
 import assert from 'node:assert/strict';
-import { access, readFile, readdir } from 'node:fs/promises';
+import { readFile, readdir } from 'node:fs/promises';
 import { join } from 'node:path';
 import { pathToFileURL } from 'node:url';
 import {
   artifactMetadata,
-  buildStudioOverrideBaseline,
+  cargoPatchesForRoot,
   cargoPatchTomlPattern,
   cargoLockHasPatchSource,
   cargoLockPackageVersion,
@@ -16,13 +16,12 @@ import {
   parseRustToolchain,
   provenancePath,
   readJson,
-  repoRoot,
   run,
+  studioHostPackagePath,
+  syncStudioHostPackage,
   upstreamDir,
   upstreamLockPath,
-  studioOverrideManifestPath,
-  studioHostDir,
-  studioMirroredAssetPaths,
+  upstreamStudioPackagePath,
   tomlSection,
   vendoredArtifactNames,
   vendorDir,
@@ -69,40 +68,25 @@ export async function verifyRhwpUpstream() {
     assert.equal(cargoLockPackageVersion(cargoLock, 'rhwp'), lock.version);
     await verifyCargoPatches(lock, cargoRoot, cargoLock);
   }
-  const overrideManifest = await readJson(studioOverrideManifestPath);
+  const hostPackage = await readJson(studioHostPackagePath);
   assert.deepEqual(
-    overrideManifest.upstream,
-    await buildStudioOverrideBaseline(overrideManifest, lock),
-    'studio override counterpart baseline must match the pinned upstream',
+    hostPackage,
+    syncStudioHostPackage(hostPackage, await readJson(upstreamStudioPackagePath)),
+    'studio-host must declare the pinned upstream rhwp-studio dependencies',
   );
-  for (const relativePath of studioMirroredAssetPaths) {
-    assert.deepEqual(
-      await artifactMetadata(join(studioHostDir, relativePath)),
-      await artifactMetadata(join(upstreamDir, 'rhwp-studio', relativePath)),
-      `${relativePath} must match the pinned upstream studio asset`,
-    );
-  }
-  await verifyFontAssets();
   return lock;
 }
 
 async function verifyCargoPatches(lock, cargoRoot, cargoLock) {
   const cargoToml = await readFile(join(cargoRoot, 'Cargo.toml'), 'utf8');
   const patchSection = tomlSection(cargoToml, 'patch.crates-io');
-  for (const [crateName, patch] of Object.entries(lock.cargoPatches ?? {})) {
+  for (const [crateName, patch] of Object.entries(cargoPatchesForRoot(lock.cargoPatches ?? {}, cargoRoot))) {
     assert.match(patchSection, cargoPatchTomlPattern(crateName, patch));
     assert.ok(
       cargoLockHasPatchSource(cargoLock, crateName, patch),
-      `${crateName} Cargo.lock source must match ${patch.git}#${patch.rev}`,
+      `${crateName} Cargo.lock source must match ${patch.path ?? `${patch.git}#${patch.rev}`}`,
     );
   }
-}
-
-async function verifyFontAssets() {
-  const fontCatalog = await readFile(join(repoRoot, 'apps/studio-host/src/core/font-catalog.ts'), 'utf8');
-  const names = new Set(Array.from(fontCatalog.matchAll(/['"]\/fonts\/([^'"]+)['"]/g), (m) => m[1]));
-  assert.ok(names.size > 0, 'active font catalog must reference packaged fonts');
-  for (const name of names) await access(join(repoRoot, 'assets/fonts', name));
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {

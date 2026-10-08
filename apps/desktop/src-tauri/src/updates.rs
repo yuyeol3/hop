@@ -4,7 +4,7 @@ use tauri::{AppHandle, Emitter, Manager};
 #[cfg(not(debug_assertions))]
 use tauri_plugin_updater::{Update, UpdaterExt};
 
-use crate::state::AppState;
+use crate::app_state::AppState;
 
 const UPDATE_STATE_EVENT: &str = "hop-update-state";
 
@@ -38,6 +38,9 @@ pub struct UpdateManagerState {
     notice: UpdateNoticeState,
     #[cfg(not(debug_assertions))]
     pending_update: Option<Update>,
+    /// Downloaded update waiting for every window to close before it is installed.
+    #[cfg(not(debug_assertions))]
+    ready_update: Option<(Update, Vec<u8>)>,
 }
 
 impl UpdateManagerState {
@@ -94,10 +97,11 @@ impl UpdateManagerState {
     }
 
     #[cfg(not(debug_assertions))]
-    fn set_ready(&mut self, version: &str) {
+    fn set_ready(&mut self, version: &str, update: Update, bytes: Vec<u8>) {
         self.notice = UpdateNoticeState::Ready {
             version: version.to_string(),
         };
+        self.ready_update = Some((update, bytes));
     }
 
     #[cfg(not(debug_assertions))]
@@ -153,13 +157,6 @@ pub fn get_update_state(app: AppHandle) -> Result<UpdateNoticeState, String> {
 
 #[tauri::command]
 pub fn start_update_install(app: AppHandle) -> Result<(), String> {
-    if has_dirty_documents(&app) {
-        return Err(
-            "저장되지 않은 변경사항이 있어 지금은 업데이트할 수 없습니다. 저장 후 다시 시도하세요."
-                .to_string(),
-        );
-    }
-
     #[cfg(debug_assertions)]
     {
         let _ = app;
@@ -219,29 +216,9 @@ async fn run_update_install(app: AppHandle, update: Update, version: String) {
         }
     };
 
-    if has_dirty_documents(&app) {
-        restore_update_error(
-            &app,
-            update,
-            &version,
-            "업데이트를 준비하는 동안 저장되지 않은 변경사항이 생겨 적용을 보류했습니다. 저장 후 다시 시도하세요."
-                .to_string(),
-        );
-        return;
-    }
-
-    if let Err(error) = update.install(bytes) {
-        restore_update_error(
-            &app,
-            update,
-            &version,
-            format_retryable_error("업데이트 설치에 실패했습니다. 다시 시도하세요.", &error),
-        );
-        return;
-    }
-
+    // Installing quits the app on Windows, so it waits until every window has closed.
     if let Ok(mut updater) = app.state::<AppState>().updater.lock() {
-        updater.set_ready(&version);
+        updater.set_ready(&version, update, bytes);
     }
     emit_update_state(&app);
 }
@@ -269,14 +246,38 @@ pub fn restart_to_apply_update(app: AppHandle) -> Result<(), String> {
         return Err("적용할 업데이트가 아직 준비되지 않았습니다.".to_string());
     }
 
-    if has_dirty_documents(&app) {
-        return Err(
-            "저장되지 않은 변경사항이 있어 다시 시작할 수 없습니다. 저장 후 다시 시도하세요."
-                .to_string(),
-        );
+    // Each window asks to save first; the update is installed once all of them have closed.
+    crate::app_quit::request_quit(&app, crate::app_quit::QuitPurpose::ApplyUpdate)
+}
+
+/// Called by the quit sequence after the last window closed.
+pub fn apply_ready_update(app: &AppHandle) -> Result<(), String> {
+    #[cfg(debug_assertions)]
+    {
+        let _ = app;
+        Err("업데이트 설치는 릴리즈 빌드에서만 사용할 수 있습니다.".to_string())
     }
 
-    app.restart();
+    #[cfg(not(debug_assertions))]
+    {
+        let ready = app
+            .state::<AppState>()
+            .updater
+            .lock()
+            .map_err(|_| "업데이트 상태 잠금 실패".to_string())?
+            .ready_update
+            .take();
+        let Some((update, bytes)) = ready else {
+            app.exit(0);
+            return Ok(());
+        };
+        if let Err(error) = update.install(bytes) {
+            eprintln!("[updater] install failed: {error}");
+            app.exit(0);
+            return Ok(());
+        }
+        app.restart();
+    }
 }
 
 #[allow(dead_code)]
@@ -287,23 +288,6 @@ fn emit_update_state(app: &AppHandle) {
     };
 
     let _ = app.emit(UPDATE_STATE_EVENT, payload);
-}
-
-fn has_dirty_documents(app: &AppHandle) -> bool {
-    #[cfg(debug_assertions)]
-    {
-        let _ = app;
-        false
-    }
-
-    #[cfg(not(debug_assertions))]
-    {
-        app.state::<AppState>()
-            .sessions
-            .lock()
-            .map(|sessions| sessions.has_dirty_sessions())
-            .unwrap_or(true)
-    }
 }
 
 #[cfg(not(debug_assertions))]
