@@ -1,4 +1,4 @@
-import { copyFileSync, existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { mkdirSync, mkdtempSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, resolve } from 'node:path';
 import { execFileSync } from 'node:child_process';
@@ -82,17 +82,9 @@ function makeIcns(outPath) {
   }
 }
 
-function copyIfPresent(from, to) {
-  if (!existsSync(resolve(to, '..'))) return;
-  copyFileSync(from, to);
-}
-
 mkdirSync(logoDir, { recursive: true });
 pngTargets.forEach(([name, size]) => renderPng(join(logoDir, name), size));
 writeIco(join(logoDir, 'favicon.ico'), [16, 32, 48, 256].map(size => join(logoDir, `logo-${size}.png`)));
 makeIcns(join(logoDir, 'icon.icns'));
-
-copyFileSync(join(logoDir, 'favicon.ico'), join(root, 'apps/studio-host/public/favicon.ico'));
-copyIfPresent(join(logoDir, 'favicon.ico'), join(root, 'apps/studio-host/dist/favicon.ico'));
 
 console.log('Generated app icons from assets/logo/logo.svg');
