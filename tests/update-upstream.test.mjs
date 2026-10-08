@@ -8,6 +8,7 @@ import test from 'node:test';
 import {
   artifactMetadata,
   assertStableTag,
+  cargoPatchesForRoot,
   cargoPatchTomlPattern,
   cargoLockHasPatchSource,
   cargoLockPackageVersion,
@@ -17,6 +18,7 @@ import {
   parseRustToolchain,
   parseUpdateTag,
   repoRelativePath,
+  resolveUpstreamCargoPatch,
   synchronizeCargoPatchToml,
   tomlSection,
   vendoredArtifactNames,
@@ -143,6 +145,81 @@ test('synchronizes Cargo patch sources as one upstream contract transition', () 
   assert.match(
     tomlSection(synchronized, 'patch.crates-io'),
     /https:\/\/github\.com\/new\/svg2pdf/,
+  );
+});
+
+test('resolves upstream git and path Cargo patches', () => {
+  const rev = '2caeb0a038f9128b79833d803b94c2667565c4da';
+  const gitToml = '[patch.crates-io]\nsvg2pdf = { git = "https://github.com/edwardkim/svg2pdf", branch = "determinism-0.13" }\n';
+  const gitLock = `[[package]]\nname = "svg2pdf"\nversion = "0.13.0"\nsource = "git+https://github.com/edwardkim/svg2pdf?branch=determinism-0.13#${rev}"\n`;
+  assert.deepEqual(
+    resolveUpstreamCargoPatch(gitToml, gitLock, 'svg2pdf'),
+    { git: 'https://github.com/edwardkim/svg2pdf', rev },
+  );
+  assert.throws(() => resolveUpstreamCargoPatch(gitToml, '', 'svg2pdf'), /not pinned in Cargo.lock/);
+
+  const pathToml = '[patch.crates-io]\nsvg2pdf = { path = "vendor/svg2pdf" }\n';
+  const pathLock = '[[package]]\nname = "svg2pdf"\nversion = "0.13.0"\n';
+  assert.deepEqual(resolveUpstreamCargoPatch(pathToml, pathLock, 'svg2pdf'), { path: 'vendor/svg2pdf' });
+  assert.equal(resolveUpstreamCargoPatch('[dependencies]\nsvg2pdf = "0.13"\n', '', 'svg2pdf'), null);
+
+  for (const path of ['../svg2pdf', 'vendor/../../svg2pdf', '/abs/svg2pdf', 'C:/abs/svg2pdf']) {
+    assert.throws(
+      () => resolveUpstreamCargoPatch(`[patch.crates-io]\nsvg2pdf = { path = "${path}" }\n`, '', 'svg2pdf'),
+      /must stay inside the upstream checkout/,
+    );
+  }
+});
+
+test('maps upstream path patches to each Cargo root and keeps git patches unchanged', () => {
+  const git = { git: 'https://github.com/edwardkim/svg2pdf', rev: '2caeb0a038f9128b79833d803b94c2667565c4da' };
+  assert.deepEqual(
+    cargoPatchesForRoot({ svg2pdf: { path: 'vendor/svg2pdf' }, other: git }, join(repoRoot, 'apps/desktop/src-tauri')),
+    { svg2pdf: { path: '../../../third_party/rhwp/vendor/svg2pdf' }, other: git },
+  );
+  assert.deepEqual(
+    cargoPatchesForRoot({ svg2pdf: { path: 'vendor/svg2pdf' } }, join(repoRoot, 'apps/desktop/quicklook/rust')),
+    { svg2pdf: { path: '../../../../third_party/rhwp/vendor/svg2pdf' } },
+  );
+});
+
+test('synchronizes a git Cargo patch to an upstream path patch', () => {
+  const previous = {
+    svg2pdf: { git: 'https://github.com/edwardkim/svg2pdf', rev: '2caeb0a038f9128b79833d803b94c2667565c4da' },
+  };
+  const next = { svg2pdf: { path: '../../../third_party/rhwp/vendor/svg2pdf' } };
+  const cargoToml = [
+    '[patch.crates-io]',
+    '# keep deterministic',
+    'svg2pdf = { git = "https://github.com/edwardkim/svg2pdf", rev = "2caeb0a038f9128b79833d803b94c2667565c4da" }',
+    '',
+  ].join('\n');
+  const synchronized = synchronizeCargoPatchToml(cargoToml, previous, next);
+  assert.equal(
+    synchronized,
+    '[patch.crates-io]\n# keep deterministic\nsvg2pdf = { path = "../../../third_party/rhwp/vendor/svg2pdf" }\n',
+  );
+  assert.match(tomlSection(synchronized, 'patch.crates-io'), cargoPatchTomlPattern('svg2pdf', next.svg2pdf));
+  assert.doesNotMatch(cargoToml, cargoPatchTomlPattern('svg2pdf', next.svg2pdf));
+  assert.doesNotMatch(
+    'svg2pdf = { path = "../../../third_party/rhwp/vendor/svg2pdf", git = "https://example.com/svg2pdf" }',
+    cargoPatchTomlPattern('svg2pdf', next.svg2pdf),
+  );
+});
+
+test('accepts only a source-less lock entry for a path Cargo patch', () => {
+  const patch = { path: '../../../third_party/rhwp/vendor/svg2pdf' };
+  assert.equal(
+    cargoLockHasPatchSource('[[package]]\nname = "svg2pdf"\nversion = "0.13.0"\n', 'svg2pdf', patch),
+    true,
+  );
+  assert.equal(
+    cargoLockHasPatchSource(
+      '[[package]]\nname = "svg2pdf"\nversion = "0.13.0"\nsource = "registry+https://github.com/rust-lang/crates.io-index"\n',
+      'svg2pdf',
+      patch,
+    ),
+    false,
   );
 });
 

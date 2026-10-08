@@ -1,6 +1,6 @@
 import { createHash } from 'node:crypto';
 import { readFile, writeFile } from 'node:fs/promises';
-import { dirname, join, relative } from 'node:path';
+import { dirname, isAbsolute, join, relative } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
 
@@ -193,8 +193,51 @@ export function escapeRegExp(value) {
   return value.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
 }
 
+// Upstream either pins a patch to a git revision or vendors it inside its own checkout.
+// Path patches are recorded relative to the upstream checkout.
+export function resolveUpstreamCargoPatch(cargoToml, cargoLock, crateName) {
+  const linePattern = new RegExp(`^${escapeRegExp(crateName)}\\s*=\\s*\\{([^}]*)\\}`, 'm');
+  const declaration = tomlSection(cargoToml, 'patch.crates-io').match(linePattern)?.[1];
+  if (declaration === undefined) return null;
+
+  const path = declaration.match(/\bpath\s*=\s*"([^"]+)"/)?.[1];
+  if (path !== undefined) {
+    if (isAbsolute(path) || /^[A-Za-z]:/.test(path) || path.split(/[\\/]/).includes('..')) {
+      throw new Error(`upstream ${crateName} patch path must stay inside the upstream checkout: ${path}`);
+    }
+    return { path };
+  }
+
+  const source = cargoLockPackageEntries(cargoLock, crateName)
+    .map((entry) => entry.source?.match(/^git\+([^?#]+)(?:\?[^#]*)?#([0-9a-f]{40})$/))
+    .find(Boolean);
+  if (!source) throw new Error(`upstream ${crateName} patch is not pinned in Cargo.lock`);
+  return { git: source[1], rev: source[2] };
+}
+
+export function cargoPatchesForRoot(patches, cargoRoot) {
+  return Object.fromEntries(Object.entries(patches).map(([crateName, patch]) => [
+    crateName,
+    patch.path === undefined
+      ? patch
+      : { path: relative(cargoRoot, join(upstreamDir, patch.path)).replaceAll('\\', '/') },
+  ]));
+}
+
+function cargoPatchDeclaration(crateName, patch) {
+  if (patch.path !== undefined) return `${crateName} = { path = ${JSON.stringify(patch.path)} }`;
+  return `${crateName} = { git = ${JSON.stringify(patch.git)}, rev = ${JSON.stringify(patch.rev)} }`;
+}
+
 export function cargoPatchTomlPattern(crateName, patch) {
   const crate = escapeRegExp(crateName);
+  if (patch.path !== undefined) {
+    const path = escapeRegExp(patch.path);
+    return new RegExp(
+      `^${crate}\\s*=\\s*\\{(?=[^}]*path\\s*=\\s*"${path}")(?![^}]*git\\s*=)[^}]*\\}[^\\S\\r\\n]*$`,
+      'm',
+    );
+  }
   const git = escapeRegExp(patch.git);
   const rev = escapeRegExp(patch.rev);
   return new RegExp(
@@ -220,7 +263,7 @@ export function synchronizeCargoPatchToml(toml, previousPatches, nextPatches) {
       continue;
     }
 
-    const declaration = `${crateName} = { git = ${JSON.stringify(next.git)}, rev = ${JSON.stringify(next.rev)} }`;
+    const declaration = cargoPatchDeclaration(crateName, next);
     if (linePattern.test(patchSection)) {
       patchSection = patchSection.replace(linePattern, declaration);
       continue;
@@ -232,6 +275,8 @@ export function synchronizeCargoPatchToml(toml, previousPatches, nextPatches) {
 
 export function cargoLockHasPatchSource(lock, crateName, patch) {
   return cargoLockPackageEntries(lock, crateName).some(({ source }) => {
+    // Cargo records path dependencies without a source.
+    if (patch.path !== undefined) return source === undefined;
     const parsed = source?.match(/^git\+([^?#]+)(?:\?[^#]*)?#([0-9a-f]{40})$/);
     return parsed?.[1] === patch.git && parsed[2] === patch.rev;
   });

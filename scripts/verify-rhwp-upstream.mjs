@@ -5,6 +5,7 @@ import { pathToFileURL } from 'node:url';
 import {
   artifactMetadata,
   buildStudioOverrideBaseline,
+  cargoPatchesForRoot,
   cargoPatchTomlPattern,
   cargoLockHasPatchSource,
   cargoLockPackageVersion,
@@ -89,11 +90,11 @@ export async function verifyRhwpUpstream() {
 async function verifyCargoPatches(lock, cargoRoot, cargoLock) {
   const cargoToml = await readFile(join(cargoRoot, 'Cargo.toml'), 'utf8');
   const patchSection = tomlSection(cargoToml, 'patch.crates-io');
-  for (const [crateName, patch] of Object.entries(lock.cargoPatches ?? {})) {
+  for (const [crateName, patch] of Object.entries(cargoPatchesForRoot(lock.cargoPatches ?? {}, cargoRoot))) {
     assert.match(patchSection, cargoPatchTomlPattern(crateName, patch));
     assert.ok(
       cargoLockHasPatchSource(cargoLock, crateName, patch),
-      `${crateName} Cargo.lock source must match ${patch.git}#${patch.rev}`,
+      `${crateName} Cargo.lock source must match ${patch.path ?? `${patch.git}#${patch.rev}`}`,
     );
   }
 }
