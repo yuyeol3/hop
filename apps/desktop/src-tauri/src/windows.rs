@@ -26,7 +26,7 @@ pub fn new_editor_window_label() -> String {
 pub fn create_editor_window_with_label(app: &AppHandle, label: &str) -> Result<(), String> {
     let geometry = new_window_geometry(app);
 
-    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html".into()))
+    let builder = WebviewWindowBuilder::new(app, label, WebviewUrl::App("index.html?chrome=embed".into()))
         .title("HOP")
         .inner_size(geometry.width, geometry.height)
         .min_inner_size(geometry.min_width, geometry.min_height)
@@ -190,7 +190,7 @@ fn attach_pending_open_cleanup(app: &AppHandle, window: &WebviewWindow) {
     let label = window.label().to_string();
     window.on_window_event(move |event| {
         if matches!(event, WindowEvent::Destroyed) {
-            app.state::<crate::state::AppState>()
+            app.state::<crate::app_state::AppState>()
                 .pending_open_paths
                 .discard_for_window(&label);
         }

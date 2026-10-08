@@ -3,7 +3,7 @@ use std::path::{Path, PathBuf};
 
 use crate::commands::PageRange;
 use crate::pdf_font_fallbacks::add_font_fallbacks;
-use crate::state::atomic_write;
+use crate::document_files::atomic_write;
 
 pub fn export_core_to_pdf(
     core: &DocumentCore,

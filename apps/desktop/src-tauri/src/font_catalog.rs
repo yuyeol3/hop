@@ -12,6 +12,8 @@ pub struct LocalFontEntry {
     pub post_script_name: String,
     pub style: String,
     pub weight: u16,
+    /// Face index inside a font collection (TTC); 0 for single-face files.
+    pub face_index: u32,
     pub source_kind: String,
     pub path: Option<String>,
 }
@@ -148,6 +150,7 @@ pub fn collect_local_font_entries(extra_font_dirs: &[PathBuf]) -> Vec<LocalFontE
                 post_script_name: face.post_script_name.clone(),
                 style: style.to_string(),
                 weight: face.weight.0,
+                face_index: face.index,
                 source_kind: source_kind.to_string(),
                 path: path.clone(),
             });
@@ -294,6 +297,7 @@ mod tests {
                         post_script_name: face.post_script_name.clone(),
                         style: style_name(face.style).to_string(),
                         weight: face.weight.0,
+                        face_index: face.index,
                         source_kind: "system-installed".to_string(),
                         path: path.clone(),
                     });

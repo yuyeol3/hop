@@ -14,7 +14,7 @@
       {
         "title": "HOP",
         "label": "main",
-        "url": "index.html",
+        "url": "index.html?chrome=embed",
         "width": 1280,
         "height": 900,
         "minWidth": 960,
