@@ -19,6 +19,7 @@ import {
   parseUpdateTag,
   repoRelativePath,
   resolveUpstreamCargoPatch,
+  syncStudioHostPackage,
   synchronizeCargoPatchToml,
   tomlSection,
   vendoredArtifactNames,
@@ -223,6 +224,25 @@ test('accepts only a source-less lock entry for a path Cargo patch', () => {
   );
 });
 
+test('studio-host follows upstream studio runtime dependencies and keeps host-only ones', () => {
+  const host = {
+    name: 'host',
+    dependencies: { '@tauri-apps/api': '^2', 'canvaskit-wasm': '^0.41.0', removed: '^1' },
+    devDependencies: { vite: '^8.0.0', typescript: '^7.0.0', vitest: '^4' },
+  };
+  const upstream = {
+    dependencies: { 'canvaskit-wasm': '^0.42.0', pngjs: '^7.0.0' },
+    devDependencies: { vite: '^8.3.2', typescript: '^7.0.2', 'vite-plugin-pwa': '^1' },
+  };
+
+  assert.deepEqual(syncStudioHostPackage(host, upstream), {
+    name: 'host',
+    dependencies: { '@tauri-apps/api': '^2', 'canvaskit-wasm': '^0.42.0', pngjs: '^7.0.0' },
+    devDependencies: { vite: '^8.3.2', typescript: '^7.0.2', vitest: '^4' },
+  });
+  assert.throws(() => syncStudioHostPackage(host, { dependencies: {}, devDependencies: {} }), /vite|typescript/);
+});
+
 test('provenance covers every shipped vendored file', () => {
   assert.deepEqual(vendoredArtifactNames, [
     'rhwp_bg.wasm',
@@ -254,7 +274,7 @@ test('vendored artifacts bypass checkout line-ending conversion', () => {
   assert.match(attributes, /rhwp\.d\.ts: text: unset/);
 });
 
-test('upstream override baselines are independent of checkout line endings', async () => {
+test('the pinned upstream contract verifies', async () => {
   await assert.doesNotReject(verifyRhwpUpstream());
 });
 

@@ -111,3 +111,69 @@ jobs:
 
       - name: Lint desktop Rust
         run: pnpm clippy:desktop
+
+  desktop-smoke:
+    name: Desktop smoke (Windows)
+    runs-on: windows-2022
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v5
+        with:
+          submodules: true
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v5
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          package-manager-cache: false
+
+      - name: Enable pnpm
+        run: corepack enable
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Pin Rust to upstream contract
+        shell: bash
+        run: |
+          toolchain="$(node -p "require('./config/rhwp-upstream.json').rustToolchain")"
+          rustup toolchain install "$toolchain" --profile minimal
+          echo "RUSTUP_TOOLCHAIN=$toolchain" >> "$GITHUB_ENV"
+
+      - name: Cache cargo
+        uses: actions/cache@v5
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            apps/desktop/src-tauri/target
+          key: desktop-smoke-cargo-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: |
+            desktop-smoke-cargo-
+
+      - name: Install Node dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Build debug desktop app
+        run: pnpm --filter hop-desktop tauri build --debug --no-bundle
+
+      # Opens each sample in the real app, saves it under a new name, reopens it and compares
+      # page counts (apps/studio-host/host/smoke.ts).
+      - name: Open, save and reopen documents
+        shell: bash
+        run: |
+          set -euo pipefail
+          app="apps/desktop/src-tauri/target/debug/hop-desktop.exe"
+          samples="third_party/rhwp/rhwp-studio/public/samples"
+          work="$RUNNER_TEMP/hop-smoke"
+          mkdir -p "$work"
+          for sample in biz_plan.hwp form-002.hwpx; do
+            log="$work/$sample.log"
+            HOP_SMOKE_INPUT="$(cygpath -w "$PWD/$samples/$sample")" \
+            HOP_SMOKE_OUTPUT="$(cygpath -w "$work/saved-$sample")" \
+            HOP_SMOKE_LOG="$(cygpath -w "$log")" \
+              timeout 300 "$app" || true
+            cat "$log" 2>/dev/null || echo "no smoke log for $sample"
+            grep -q '^SMOKE OK' "$log"
+          done

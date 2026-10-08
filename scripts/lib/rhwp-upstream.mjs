@@ -7,9 +7,9 @@ import { spawnSync } from 'node:child_process';
 export const repoRoot = dirname(dirname(dirname(fileURLToPath(import.meta.url))));
 export const upstreamDir = join(repoRoot, 'third_party/rhwp');
 export const upstreamLockPath = join(repoRoot, 'config/rhwp-upstream.json');
-export const studioOverrideManifestPath = join(repoRoot, 'config/rhwp-studio-overrides.json');
-export const upstreamStudioDir = join(upstreamDir, 'rhwp-studio/src');
 export const studioHostDir = join(repoRoot, 'apps/studio-host');
+export const studioHostPackagePath = join(studioHostDir, 'package.json');
+export const upstreamStudioPackagePath = join(upstreamDir, 'rhwp-studio/package.json');
 export const vendorDir = join(repoRoot, 'apps/studio-host/vendor/rhwp-core');
 export const provenancePath = join(vendorDir, 'PROVENANCE.json');
 export const cargoRoots = [
@@ -29,7 +29,10 @@ export const vendoredArtifactNames = [
   'package.json',
   'LICENSE',
 ];
-export const studioMirroredAssetPaths = ['public/images/icon_small_ko_dark.svg'];
+// studio-host builds upstream rhwp-studio from source, so it installs upstream's runtime
+// dependencies and uses the same build tool ranges. Everything else in it is HOP-owned.
+export const hostOnlyStudioDependencies = ['@tauri-apps/api', '@tauri-apps/plugin-dialog'];
+export const mirroredStudioDevDependencies = ['typescript', 'vite'];
 
 export async function readJson(path) {
   return JSON.parse(await readFile(path, 'utf8'));
@@ -45,6 +48,8 @@ export function run(command, args, options = {}) {
     encoding: 'utf8',
     env: { ...process.env, ...options.env },
     stdio: options.stdio ?? 'pipe',
+    // Windows package-manager shims (pnpm.cmd) only resolve through a shell.
+    shell: options.shell ?? false,
   });
   if (result.status !== 0) {
     const details = [result.stdout, result.stderr].filter(Boolean).join('\n').trim();
@@ -118,11 +123,6 @@ export function normalizeTextArtifactLineEndings(text) {
   return text.replaceAll('\r\n', '\n');
 }
 
-async function textArtifactSha256(path) {
-  const text = normalizeTextArtifactLineEndings(await readFile(path, 'utf8'));
-  return createHash('sha256').update(text, 'utf8').digest('hex');
-}
-
 export function repoRelativePath(path) {
   return relative(repoRoot, path).replaceAll('\\', '/');
 }
@@ -144,25 +144,21 @@ export async function buildProvenance(lock) {
   };
 }
 
-export async function buildStudioOverrideBaseline(manifest, upstream) {
-  const counterparts = {};
-  for (const entry of manifest.overrides) {
-    if (entry.strategy !== 'extension' && entry.strategy !== 'fork') continue;
-    const relativePath = entry.id.endsWith('.css') ? entry.id : `${entry.id}.ts`;
-    counterparts[entry.id] = await textArtifactSha256(join(upstreamStudioDir, relativePath));
+/** studio-host package.json with upstream runtime dependencies and build tool ranges applied. */
+export function syncStudioHostPackage(hostPackage, upstreamPackage) {
+  const hostOnly = Object.entries(hostPackage.dependencies ?? {})
+    .filter(([name]) => hostOnlyStudioDependencies.includes(name));
+  const dependencies = Object.fromEntries(
+    [...hostOnly, ...Object.entries(upstreamPackage.dependencies ?? {})]
+      .sort(([left], [right]) => left.localeCompare(right)),
+  );
+  const devDependencies = { ...hostPackage.devDependencies };
+  for (const name of mirroredStudioDevDependencies) {
+    const range = upstreamPackage.devDependencies?.[name];
+    if (!range) throw new Error(`upstream rhwp-studio no longer declares ${name}`);
+    devDependencies[name] = range;
   }
-  const assets = {};
-  for (const relativePath of studioMirroredAssetPaths) {
-    assets[relativePath] = await textArtifactSha256(
-      join(upstreamDir, 'rhwp-studio', relativePath),
-    );
-  }
-  return {
-    version: upstream.version,
-    commit: upstream.commit,
-    counterparts,
-    assets,
-  };
+  return { ...hostPackage, dependencies, devDependencies };
 }
 
 export function currentUpstreamCommit() {

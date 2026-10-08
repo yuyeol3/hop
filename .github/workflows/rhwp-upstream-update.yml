@@ -118,7 +118,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          allowed_paths='^(third_party/rhwp|config/rhwp-upstream\.json|config/rhwp-studio-overrides\.json|apps/studio-host/vendor/rhwp-core/.*|apps/studio-host/public/images/icon_small_ko_dark\.svg|apps/desktop/src-tauri/Cargo\.(toml|lock)|apps/desktop/quicklook/rust/Cargo\.(toml|lock))$'
+          allowed_paths='^(third_party/rhwp|config/rhwp-upstream\.json|apps/studio-host/vendor/rhwp-core/.*|apps/studio-host/package\.json|pnpm-lock\.yaml|apps/desktop/src-tauri/Cargo\.(toml|lock)|apps/desktop/quicklook/rust/Cargo\.(toml|lock))$'
           unexpected="$(git diff --name-only | grep -Ev "$allowed_paths" || true)"
           if [[ -n "$unexpected" ]]; then
             echo "Updater changed paths outside its contract:" >&2
@@ -130,9 +130,9 @@ jobs:
           git diff --binary --full-index -- \
             third_party/rhwp \
             config/rhwp-upstream.json \
-            config/rhwp-studio-overrides.json \
             apps/studio-host/vendor/rhwp-core \
-            apps/studio-host/public/images/icon_small_ko_dark.svg \
+            apps/studio-host/package.json \
+            pnpm-lock.yaml \
             apps/desktop/src-tauri/Cargo.toml \
             apps/desktop/src-tauri/Cargo.lock \
             apps/desktop/quicklook/rust/Cargo.toml \
@@ -197,15 +197,9 @@ jobs:
           fi
           git push --force-with-lease origin "HEAD:refs/heads/$branch"
 
-          changed_inputs="$(sed -n 's/^Review changed studio inputs: //p' candidate/rhwp-update.log | tail -n 1)"
-          if [[ -z "$changed_inputs" ]]; then
-            changed_inputs="none reported by the updater"
-          fi
-          body="$(printf '%s\n\n%s\n\n%s\n\n%s\n' \
+          body="$(printf '%s\n\n%s\n' \
             "Automated candidate for rhwp $RHWP_TAG." \
-            "Changed studio inputs: $changed_inputs" \
-            "CI must pass before merge. Review the generated diff and complete the product smoke tests in docs/operations/RHWP_UPDATE.md." \
-            "This pull request is intentionally not auto-merged.")"
+            "rhwp-auto-merge.yml merges this once HOP CI, including the Windows desktop smoke test, passes on this commit.")"
 
           pr_number="$(gh pr list --base main --head "$branch" --state open --json number --jq '.[0].number // empty')"
           if [[ -n "$pr_number" ]]; then

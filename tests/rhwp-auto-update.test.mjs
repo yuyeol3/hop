@@ -25,3 +25,19 @@ test('isolates upstream candidate generation from pull request write permissions
   assert.match(publishJob, /gh workflow run ci\.yml --ref "\$branch"/);
   assert.doesNotMatch(publishJob, /pnpm upstream:update/);
 });
+
+test('merges only the update commit that passed HOP CI including the desktop smoke test', async () => {
+  const [mergeWorkflow, ciWorkflow] = await Promise.all([
+    readFile(join(repoRoot, '.github/workflows/rhwp-auto-merge.yml'), 'utf8'),
+    readFile(join(repoRoot, '.github/workflows/ci.yml'), 'utf8'),
+  ]);
+
+  assert.match(mergeWorkflow, /workflows: \["HOP CI"\]/);
+  assert.match(mergeWorkflow, /workflow_run\.conclusion == 'success'/);
+  assert.match(mergeWorkflow, /head_branch == 'automation\/rhwp-upstream'/);
+  assert.match(mergeWorkflow, /--match-head-commit "\$HEAD_SHA"/);
+  assert.match(mergeWorkflow, /^permissions: \{\}$/m);
+  assert.match(ciWorkflow, /^name: HOP CI$/m);
+  assert.match(ciWorkflow, /desktop-smoke:/);
+  assert.match(ciWorkflow, /grep -q '\^SMOKE OK'/);
+});
