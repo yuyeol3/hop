@@ -53,12 +53,12 @@ Arch 계열 배포판용 native 패키지는 아직 제공하지 않는다. `deb
 자동 업데이트는 GitHub Release의 `latest.json`을 사용한다.
 
 ```text
-https://github.com/golbin/hop/releases/latest/download/latest.json
+https://github.com/yuyeol3/hop/releases/latest/download/latest.json
 ```
 
-릴리즈 잡은 Tauri updater용 압축 bundle과 `.sig` 파일을 `HOP-updater-*` 또는 설치 파일 이름으로 함께 올리고, `latest.json` 안의 다운로드 URL은 해당 릴리즈 태그의 asset을 가리키게 만든다. manifest에는 `darwin-aarch64-app`, `windows-x86_64-msi`, `linux-x86_64-appimage`, `linux-aarch64-deb`처럼 Tauri가 먼저 찾는 installer-specific key와 fallback key를 함께 넣는다. Linux installer-specific key는 각 패키지 형식을 그대로 가리켜야 하며, generic `linux-x86_64`와 `linux-aarch64` fallback은 Linux 기본 다운로드 정책에 맞춰 `.deb`를 가리킨다. AppImage 설치본을 updater로 `.deb`에 자동 전환하는 흐름은 보장하지 않는다. 앱은 시작 시 이 manifest를 확인한다. 업데이트가 있으면 다운로드와 설치를 수행하고, Rust 쪽에서 아직 dirty 문서 세션이 없을 때만 재시작한다.
+릴리즈 잡은 Tauri updater용 압축 bundle과 `.sig` 파일을 `HOP-updater-*` 또는 설치 파일 이름으로 함께 올리고, `latest.json` 안의 다운로드 URL은 해당 릴리즈 태그의 asset을 가리키게 만든다. manifest에는 `darwin-aarch64-app`, `windows-x86_64-msi`, `linux-x86_64-appimage`, `linux-aarch64-deb`처럼 Tauri가 먼저 찾는 installer-specific key와 fallback key를 함께 넣는다. Linux installer-specific key는 각 패키지 형식을 그대로 가리켜야 하며, generic `linux-x86_64`와 `linux-aarch64` fallback은 Linux 기본 다운로드 정책에 맞춰 `.deb`를 가리킨다. AppImage 설치본을 updater로 `.deb`에 자동 전환하는 흐름은 보장하지 않는다. 앱은 시작 시 이 manifest를 확인한다. 사용자가 받기를 누르면 업데이트를 내려받고, 다시 시작을 누르면 각 창이 차례로 저장 여부를 묻고 닫힌 뒤에 설치하고 재시작한다. 어느 창에서든 취소하면 설치를 미룬다.
 
-수동 실행에서 `create_release`를 켜면 macOS arm64와 macOS x64를 모두 빌드해야 한다. README와 홈페이지가 두 macOS `.dmg`에 직접 링크하기 때문이다. macOS 공개 릴리즈가 unsigned로 나가는 일을 막기 위해, macOS release build는 Apple signing certificate와 notarization credential이 없으면 실패한다. 일부 플랫폼만 확인하고 싶을 때는 `create_release`를 끄고 artifact 빌드만 실행한다.
+수동 실행에서 `create_release`를 켜면 macOS arm64와 macOS x64를 모두 빌드하거나 둘 다 빼야 한다. README가 두 macOS `.dmg`에 직접 링크하기 때문이다. Apple 서명 인증서가 없는 fork(yuyeol3/hop)는 macOS를 빼고 Windows/Linux만 릴리스한다. fork의 updater 서명 키는 fork 전용이며 `TAURI_SIGNING_PRIVATE_KEY`와 `TAURI_SIGNING_PRIVATE_KEY_PASSWORD` secret으로 등록한다. macOS 공개 릴리즈가 unsigned로 나가는 일을 막기 위해, macOS release build는 Apple signing certificate와 notarization credential이 없으면 실패한다. 일부 플랫폼만 확인하고 싶을 때는 `create_release`를 끄고 artifact 빌드만 실행한다.
 
 ## 수동 빌드
 
