@@ -2,9 +2,11 @@ import { upstreamLocalFonts } from '@/upstream/local-fonts';
 import type {
   DetectLocalFontsOptions,
   GetLocalFontsOptions,
+  HostFontData,
   LocalFontRecord,
   LocalFontSnapshot,
   LocalFontState,
+  LocalFontStyleRequest,
 } from '@/upstream/local-fonts';
 import {
   clearStoredDesktopFonts,
@@ -33,6 +35,7 @@ export type {
   LocalFontSnapshot,
   LocalFontState,
   LocalFontStorageKind,
+  LocalFontStyleRequest,
 } from '@/upstream/local-fonts';
 export type { LocalFontEntry } from './desktop-local-fonts';
 
@@ -94,9 +97,27 @@ export function resolveLocalFont(fontName: string): LocalFontRecord | null {
 }
 
 export function localFontFaceKey(
-  record: Pick<LocalFontRecord, 'family' | 'fullName' | 'postscriptName'>,
+  record: Pick<LocalFontRecord, 'family' | 'fullName' | 'postscriptName' | 'hostReference'>,
 ): string {
   return upstreamLocalFonts.localFontFaceKey(record);
+}
+
+// HOP does not install a host font provider; the upstream host-font API is passed through so an
+// embedding host still works, while the provider-less renderer path stays on HOP's font catalog.
+export const setHostFontProvider = upstreamLocalFonts.setHostFontProvider;
+export const onHostFontsChanged = upstreamLocalFonts.onHostFontsChanged;
+export const hasHostFontProvider = upstreamLocalFonts.hasHostFontProvider;
+export const prepareHostFontCatalog = upstreamLocalFonts.prepareHostFontCatalog;
+export const getHostFontState = upstreamLocalFonts.getHostFontState;
+
+export function resolveRendererLocalFont(name: string, style?: LocalFontStyleRequest): LocalFontRecord | null {
+  return hasHostFontProvider() ? upstreamLocalFonts.resolveRendererLocalFont(name, style) : resolveLocalFont(name);
+}
+
+export async function loadRendererLocalFont(record: LocalFontRecord): Promise<HostFontData | null> {
+  if (record.hostReference) return upstreamLocalFonts.loadRendererLocalFont(record);
+  const bytes = await loadLocalFontBytes(record.postscriptName || record.fullName);
+  return bytes ? { bytes, faceIndex: 0 } : null;
 }
 
 export function loadLocalFontBytesFor(fontNames: readonly string[]): Promise<Map<string, ArrayBuffer>> {

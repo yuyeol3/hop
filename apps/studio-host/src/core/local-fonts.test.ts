@@ -178,6 +178,37 @@ describe('local fonts', () => {
     expect([...new Uint8Array(bytesByFace.get('family-bold')!)]).toEqual([1, 2, 3]);
   });
 
+  it('keeps renderer font resolution on the desktop catalog when no host provider is set', async () => {
+    (globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} };
+    invokeMock.mockImplementation(async (command: string, args?: { path?: string }) => {
+      if (command === 'list_local_fonts') {
+        return [{
+          family: '데스크톱 폰트',
+          postScriptName: 'DesktopFont-Regular',
+          style: 'Regular',
+          sourceKind: 'file-backed',
+          path: '/fonts/desktop-regular.ttf',
+        }];
+      }
+      if (command === 'read_local_font') {
+        expect(args?.path).toBe('/fonts/desktop-regular.ttf');
+        return [4, 5, 6];
+      }
+      throw new Error(`unexpected command: ${command}`);
+    });
+
+    const { detectLocalFonts, hasHostFontProvider, loadRendererLocalFont, resolveRendererLocalFont } =
+      await import('./local-fonts');
+    await detectLocalFonts({ includeRegistered: true });
+
+    expect(hasHostFontProvider()).toBe(false);
+    const record = resolveRendererLocalFont('데스크톱 폰트', { weight: 400, slant: 'normal' });
+    expect(record?.postscriptName).toBe('DesktopFont-Regular');
+    const data = await loadRendererLocalFont(record!);
+    expect(data?.faceIndex).toBe(0);
+    expect([...new Uint8Array(data!.bytes)]).toEqual([4, 5, 6]);
+  });
+
   it('removes previously registered file-backed faces after a forced catalog refresh', async () => {
     (globalThis as { window?: unknown }).window = { __TAURI_INTERNALS__: {} };
     const addedFamilies: string[] = [];
