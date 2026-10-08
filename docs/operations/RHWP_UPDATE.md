@@ -3,6 +3,9 @@
 이 문서는 HOP가 사용하는 `rhwp` 안정 릴리스를 새 버전으로 올릴 때 따르는 실행 체크리스트다.
 경계의 설계와 소유권 원칙은 [`UPSTREAM.md`](../architecture/UPSTREAM.md)를 참고한다.
 
+평소에는 `rhwp-upstream-update.yml`이 새 릴리스 PR을 만들고, CI가 통과하면 `rhwp-auto-merge.yml`이
+병합한다. 이 매뉴얼은 자동화 PR의 CI가 실패했거나 수동으로 업데이트할 때 따른다.
+
 ## 업데이트가 바꾸는 범위
 
 `pnpm upstream:update -- <tag>`는 다음 항목을 하나의 candidate로 맞춘다.
@@ -11,8 +14,7 @@
 * `config/rhwp-upstream.json`의 버전, 태그, 커밋, Rust 및 WASM 생성기 기준선
 * `apps/studio-host/vendor/rhwp-core`의 WASM package와 provenance
 * desktop과 Quick Look의 HOP-owned `[patch]` 선언과 `Cargo.lock`
-* upstream에서 미러링하는 studio asset
-* `config/rhwp-studio-overrides.json`의 upstream counterpart hash
+* `apps/studio-host/package.json`의 upstream studio 의존성과 `pnpm-lock.yaml`
 
 `third_party/rhwp` 파일을 직접 고치거나 HOP 기능을 그 안에 추가하지 않는다.
 
@@ -46,7 +48,7 @@ pnpm upstream:update -- vX.Y.Z
 ```
 
 도구는 공식 `edwardkim/rhwp` origin에서 정확한 태그를 fetch하고 detached commit으로 이동한다.
-WASM을 임시 디렉터리에서 새로 만들고, Cargo lockfile과 provenance 및 override baseline을 갱신한 뒤
+WASM을 임시 디렉터리에서 새로 만들고, Cargo lockfile, studio 의존성과 provenance를 갱신한 뒤
 전체 upstream 계약을 다시 검증한다. 검증 전에 기존 vendored WASM을 재사용하거나 생성 단계를 생략할
 수 없다.
 
@@ -64,7 +66,7 @@ HOP_ALLOW_WASM_PACK_VERSION_CHANGE=1 pnpm upstream:update -- vX.Y.Z
 ```sh
 git status --short
 git diff --submodule=log -- third_party/rhwp
-git diff -- config/rhwp-upstream.json config/rhwp-studio-overrides.json
+git diff -- config/rhwp-upstream.json apps/studio-host/package.json
 git diff -- apps/desktop/src-tauri/Cargo.toml apps/desktop/src-tauri/Cargo.lock
 git diff -- apps/desktop/quicklook/rust/Cargo.toml apps/desktop/quicklook/rust/Cargo.lock
 git diff -- apps/studio-host/vendor/rhwp-core/PROVENANCE.json
@@ -77,26 +79,11 @@ git diff -- apps/studio-host/vendor/rhwp-core/PROVENANCE.json
 * 두 Cargo manifest의 patch source/revision과 lockfile의 `rhwp`가 같은 새 버전을 가리킨다. upstream이
   patch 저장소를 옮겼거나 git patch를 vendor path patch로 바꿨다면 updater가 이전 계약에서 새 계약으로
   두 manifest를 함께 전환해야 한다.
-* updater가 출력한 `Review changed studio inputs`의 각 파일을 upstream diff와 비교한다.
-* `extension` 또는 `fork` counterpart 변경이 HOP adapter와 override의 전제 조건을 깨지 않는다.
-* upstream에서 사라진 command, import, public asset 또는 native API를 HOP가 계속 참조하지 않는다.
-* upstream 새 기능을 HOP 제품 정책에 자동 노출하지 않는다. 파일 형식, 저장, 인쇄, 창, recovery 동작은
-  별도로 채택 여부를 결정한다.
+* `tests/rhwp-boundary.test.mjs`의 upstream 공개 표면 검사가 통과한다. 실패하면 upstream이 embed RPC,
+  automation, 글꼴 공급자 또는 IME 보정이 기대는 DOM을 바꾼 것이다.
 
-각 변경된 counterpart는 다음 순서로 분류한다.
-
-1. upstream이 HOP workaround를 흡수했다면 override, alias, baseline과 전용 테스트를 함께 제거한다.
-2. 제품 정책만 남았다면 공개 API를 조합하는 작은 adapter/extension으로 축소한다.
-3. 독립적인 desktop 기능이면 contribution으로 유지한다.
-4. upstream 내부 구현을 계속 복사해야 할 때만 fork를 유지하고 manifest 이유와 검증 책임을 갱신한다.
-
-특히 renderer lifecycle, page positioning, ruler, undo/snapshot, validation repair를 host에서 재구현하지
-않는다. upstream 공개 protocol을 사용하고 HOP은 backend 선택, native session, font authoring처럼 제품이
-소유하는 정책만 경계에서 주입한다.
-
-호환 수정은 우선 `apps/studio-host/src/upstream`, HOP contribution, 또는
-`apps/desktop/rhwp-adapter`에 둔다. upstream 전체 파일 복사는 마지막 수단이며, 새 override가 필요하면
-manifest에 전략과 이유를 함께 기록한다.
+호환 수정은 `apps/studio-host/host/` 또는 `apps/desktop/rhwp-adapter`에 둔다. upstream 파일을 복사하거나
+Vite alias로 교체하지 않는다. 공개 표면으로 해결할 수 없으면 upstream에 확장 지점을 기여한다.
 
 ## 4. 자동 검증
 
@@ -109,7 +96,7 @@ pnpm upstream:verify
 RUSTUP_TOOLCHAIN=<toolchain> pnpm test
 RUSTUP_TOOLCHAIN=<toolchain> pnpm run clippy:desktop
 pnpm run build:studio
-RUSTUP_TOOLCHAIN=<toolchain> pnpm --filter hop-desktop tauri build --debug --bundles app
+RUSTUP_TOOLCHAIN=<toolchain> pnpm --filter hop-desktop tauri build --debug --no-bundle
 git diff --check
 ```
 
@@ -118,14 +105,16 @@ git diff --check
 
 ## 5. 제품 smoke test
 
-최소한 현재 개발 OS에서 다음 흐름을 실제 문서로 확인한다.
+CI의 `Desktop smoke (Windows)`가 debug 앱으로 HWP/HWPX를 열고, 새 이름으로 저장하고, 다시 열어 쪽수를
+비교한다. 로컬에서는 `HOP_SMOKE_INPUT`, `HOP_SMOKE_OUTPUT`, `HOP_SMOKE_LOG`를 지정해 debug 앱을 실행하면
+같은 검사를 한다. 수동 업데이트라면 최소한 현재 개발 OS에서 다음 흐름도 실제 문서로 확인한다.
 
 * HWP와 HWPX 열기, drag/drop, 최근 문서
-* 편집 후 HWP 저장, 재열기, 미저장 문서 교체/종료 guard
+* 편집 후 HWP/HWPX 저장, 재열기, 미저장 문서 교체/종료 guard
 * 외부 파일 변경 충돌 처리
 * 새 창과 다중 창에서 문서·이벤트 격리
 * 로컬 글꼴 조회·적용과 문서 렌더링
-* PDF 내보내기, 페이지 범위, 인쇄
+* PDF 내보내기, 인쇄
 * macOS Quick Look preview/thumbnail
 
 배포 candidate라면 macOS, Windows, Linux CI를 모두 통과시키고, macOS 외 Windows 또는 Linux 한
@@ -150,6 +139,6 @@ pnpm upstream:verify
 
 * 업데이트 대상이 공식 source의 불변 안정 태그와 정확한 commit으로 고정되어 있다.
 * updater가 관리하는 모든 산출물과 두 Cargo dependency graph가 같은 rhwp를 사용한다.
-* 변경된 counterpart를 검토했고 필요한 호환 수정이 HOP-owned 경계 안에 있다.
+* upstream 공개 표면 검사와 desktop smoke가 통과하고, 호환 수정이 HOP-owned 경계 안에 있다.
 * 자동 검증과 필요한 플랫폼 smoke test 결과가 작업 기록에 남아 있다.
 * `third_party/rhwp` 내부는 clean이고 의도하지 않은 생성물이나 임시 파일이 없다.

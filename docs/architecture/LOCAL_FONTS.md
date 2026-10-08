@@ -1,6 +1,6 @@
 # 로컬 폰트 해석 규칙
 
-HOP는 `third_party/rhwp`를 수정하지 않고, 데스크톱 셸과 studio host override에서 로컬 폰트 해석을 소유한다.
+HOP는 `third_party/rhwp`를 수정하지 않고, 데스크톱 셸과 upstream 호스트 글꼴 공급자(`window.rhwpStudio.fonts`)로 로컬 폰트를 제공한다.
 
 ## 목표
 
@@ -10,11 +10,10 @@ HOP는 `third_party/rhwp`를 수정하지 않고, 데스크톱 셸과 studio hos
 
 ## 해석 순서
 
-1. system-installed 폰트
-2. 지원된 file-backed 폰트
-3. HOP 번들 substitute 웹폰트
+1. 호스트가 공급한 OS 폰트(system-installed와 지원된 file-backed)
+2. upstream 번들 웹폰트(`third_party/rhwp/assets/fonts`)
 
-`apps/desktop/src-tauri/src/font_catalog.rs`가 native font catalog와 추가 스캔 루트를 소유한다. `apps/studio-host/src/core/local-fonts.ts`는 이 catalog를 읽어 webview에서 필요한 file-backed 폰트만 `FontFace`로 등록한다. `apps/studio-host/src/core/font-loader.ts`는 실제 사용 가능한 폰트 집합을 기준으로 substitute `@font-face`를 다시 계산한다.
+`apps/desktop/src-tauri/src/font_catalog.rs`가 native font catalog와 추가 스캔 루트를 소유한다. `apps/studio-host/host/fonts.ts`는 이 catalog를 upstream 호스트 글꼴 공급자 계약(`rhwp-studio/HOST_FONTS.md`)으로 넘긴다. studio에는 불투명한 face id만 전달하고 파일 경로는 호스트에 남긴다. 어떤 face를 언제 읽을지와 substitute 해석은 upstream renderer가 결정한다.
 
 ## 지원 스캔 루트
 
