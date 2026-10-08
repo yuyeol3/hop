@@ -1,15 +1,14 @@
 {
   "schemaVersion": 1,
   "source": "https://github.com/edwardkim/rhwp",
-  "version": "0.8.6",
-  "tag": "v0.8.6",
-  "commit": "f1f9c6ae58344ee9368996d3543f76b9345cf227",
+  "version": "0.8.7",
+  "tag": "v0.8.7",
+  "commit": "1a76570e833917d15817415a53c09ad61ab3203f",
   "rustToolchain": "1.93.1",
   "wasmPackVersion": "0.15.0",
   "cargoPatches": {
     "svg2pdf": {
-      "git": "https://github.com/edwardkim/svg2pdf",
-      "rev": "2caeb0a038f9128b79833d803b94c2667565c4da"
+      "path": "vendor/svg2pdf"
     }
   }
 }

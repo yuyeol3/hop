@@ -664,9 +664,9 @@ dependencies = [
 
 [[package]]
 name = "cfb"
-version = "0.14.0"
+version = "0.15.0"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a347dcabdae9c31b0825fd6a8bed285ec9c2acb89c47827126d52fa4f59cece3"
+checksum = "0f13298d9178622b7916ec5d01d470425c04273c8ed07e87b1c38b34c4f4612b"
 dependencies = [
  "fnv",
  "uuid",
@@ -4145,7 +4145,7 @@ dependencies = [
 
 [[package]]
 name = "rhwp"
-version = "0.8.6"
+version = "0.8.7"
 dependencies = [
  "aes",
  "argon2",
@@ -4153,7 +4153,7 @@ dependencies = [
  "blake3",
  "byteorder",
  "cbc",
- "cfb 0.14.0",
+ "cfb 0.15.0",
  "chacha20poly1305",
  "cipher",
  "codepage",
@@ -5109,7 +5109,6 @@ checksum = "13c2bddecc57b384dee18652358fb23172facb8a2c51ccc10d74c157bdea3292"
 [[package]]
 name = "svg2pdf"
 version = "0.13.0"
-source = "git+https://github.com/edwardkim/svg2pdf?rev=2caeb0a038f9128b79833d803b94c2667565c4da#2caeb0a038f9128b79833d803b94c2667565c4da"
 dependencies = [
  "fontdb",
  "image",
